@@ -1,11 +1,11 @@
 
 
 
-API_ID = 22299340 # https://my.telegram.org
-API_HASH = "09b09f3e2ff1306da4a19888f614d937"# https://my.telegram.org
-BOT_TOKEN = ""# Form @BotFather
-MONGO_URI = "mongodb+srv://mikota4432:jkJDQuZH6o8pxxZe@cluster0.2vngilq.mongodb.net/?retryWrites=true&w=majority"# Form https://www.mongodb.com
-START_PIC = "https://i.rj1.dev/aNWlA.png" 
+API_ID =  # https://my.telegram.org
+API_HASH = "your_api_hash_here"# https://my.telegram.org
+BOT_TOKEN = "your_bot_token_here" # Get this from @BotFather on Telegram
+MONGO_URI = "your_mongodb_uri_here"# Form https://www.mongodb.com
+START_PIC = "" 
  
 START_MSG = """<blockquote><b>✨ Hey there!</b></blockquote>
 <blockquote>Need your files sent in the right sequence?</blockquote>
@@ -26,12 +26,13 @@ COMMAND_TXT = """<b>🛠️ Bot Commands List</b>
 • /leaderboard - View top users
 • /sf - Switch between File mode and Caption mode</blockquote>"""
 
-# --- FORCE SUBSCRIBE CONFIG ---
-FSUB_CHANNEL = -1002263636517 #If you don’t want to use it, you can turn it off by setting it to 0
-FSUB_CHANNEL_2 = -1001896877147
-FSUB_CHANNEL_3 = 0 
+# Force Subscribe Channel IDs (Set to 0 to disable)
+FSUB_CHANNEL = -1001234567890 #If you don’t want to use it, you can turn it off by setting it to 0
+FSUB_CHANNEL_2 = 0 # Set to 0 if not used
+FSUB_CHANNEL_3 = 0 # Set to 0 if not used
 
-OWNER_ID = 5380609667
+OWNER_ID = 
+
 
 
 
