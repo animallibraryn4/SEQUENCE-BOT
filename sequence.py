@@ -877,7 +877,145 @@ async def ls_callback_handlers(client, query):
 @app.on_callback_query(filters.regex(r'^merging_'))
 async def handle_merging_callbacks(client, query):
     """Handle merging callbacks"""
-    await merging_callback_handler(client, query)
+    data = query.data
+    
+    # Extract the callback type
+    if data.startswith("merging_done_source_"):
+        target_user_id = int(data.split("_")[3])
+        
+        if query.from_user.id != target_user_id:
+            await query.answer("This is not for you!", show_alert=True)
+            return
+        
+        if target_user_id not in user_merging_state:
+            await query.answer("Session expired!", show_alert=True)
+            return
+        
+        state = user_merging_state[target_user_id]
+        
+        if not state["source_files"]:
+            await query.answer("No source files received!", show_alert=True)
+            return
+        
+        # Move to step 2
+        state["step"] = 2
+        
+        await query.message.edit_text(
+            "<blockquote><b>✅ Source files received!</b></blockquote>\n\n"
+            "<blockquote>Now please send the <b>TARGET FILES</b> to which you want to add the extracted audio and subtitles.\n\n"
+            "The bot will match files by season and episode number.\n\n"
+            "After sending all target files, click the button below.</blockquote>",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Done with Target Files", callback_data=f"merging_done_target_{target_user_id}")],
+                [InlineKeyboardButton("❌ Cancel Merging", callback_data=f"merging_cancel_{target_user_id}")]
+            ])
+        )
+        await query.answer()
+        
+    elif data.startswith("merging_done_target_"):
+        target_user_id = int(data.split("_")[3])
+        
+        if query.from_user.id != target_user_id:
+            await query.answer("This is not for you!", show_alert=True)
+            return
+        
+        if target_user_id not in user_merging_state:
+            await query.answer("Session expired!", show_alert=True)
+            return
+        
+        state = user_merging_state[target_user_id]
+        
+        if not state["target_files"]:
+            await query.answer("No target files received!", show_alert=True)
+            return
+        
+        # Extract tracks from source files
+        await query.message.edit_text(
+            "<blockquote>⏳ Extracting audio and subtitles from source files...\n"
+            "This may take a moment.</blockquote>"
+        )
+        
+        # Create temp directory for processing
+        import tempfile
+        import shutil
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_tracks_dir = os.path.join(temp_dir, "source_tracks")
+            os.makedirs(source_tracks_dir, exist_ok=True)
+            
+            extracted_data = {}
+            
+            for source_file_data in state["source_files"]:
+                try:
+                    # Download source file
+                    from merging import download_file
+                    source_path = await download_file(
+                        client,
+                        source_file_data["message"],
+                        source_tracks_dir
+                    )
+                    
+                    if source_path:
+                        # Extract tracks
+                        from merging import extract_audio_and_subtitles
+                        file_tracks_dir = os.path.join(temp_dir, f"tracks_{os.path.basename(source_path)}")
+                        os.makedirs(file_tracks_dir, exist_ok=True)
+                        
+                        audio_files, subtitle_files = await extract_audio_and_subtitles(
+                            source_path,
+                            file_tracks_dir
+                        )
+                        
+                        # Store extracted tracks by season/episode
+                        season = source_file_data["info"]["season"]
+                        episode = source_file_data["info"]["episode"]
+                        
+                        if str(season) not in extracted_data:
+                            extracted_data[str(season)] = {}
+                        
+                        extracted_data[str(season)][str(episode)] = {
+                            "audio": audio_files,
+                            "subtitles": subtitle_files
+                        }
+                        
+                except Exception as e:
+                    print(f"Error processing source file: {e}")
+                    continue
+            
+            # Store extracted tracks
+            state["extracted_tracks"] = extracted_data
+            
+            # Start merging process
+            await query.message.edit_text(
+                "<blockquote>✅ Tracks extracted successfully!</blockquote>\n\n"
+                "<blockquote>Starting to merge tracks into target files...</blockquote>"
+            )
+            
+            # Start the merging process
+            from merging import process_merging_files
+            await process_merging_files(client, target_user_id, query.message.chat.id)
+        
+    elif data.startswith("merging_cancel_"):
+        target_user_id = int(data.split("_")[2])
+        
+        if query.from_user.id != target_user_id:
+            await query.answer("This is not for you!", show_alert=True)
+            return
+        
+        # Cleanup
+        if target_user_id in user_merging_state:
+            # Clean temp directories
+            state = user_merging_state[target_user_id]
+            if state.get("temp_dir") and os.path.exists(state["temp_dir"]):
+                try:
+                    shutil.rmtree(state["temp_dir"])
+                except:
+                    pass
+            
+            del user_merging_state[target_user_id]
+        
+        await query.message.edit_text("<blockquote>❌ Merging cancelled.</blockquote>")
+        await query.answer("Merging cancelled.")
 
 # ----------------------- SEQUENCE MODES CALLBACKS -----------------------
 @app.on_callback_query(filters.regex(r'^set_mode_(group|per_ep)$'))
