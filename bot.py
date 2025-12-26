@@ -37,7 +37,7 @@ if __name__ == "__main__":
 
   # Changed from 'from merging import setup_merging_handlers'
 
-def main():
+
     # setup_start_handlers(app) 
     # If merging.py handles its own registration upon import, 
     # you can comment out the setup_merging_handlers(app) line.
