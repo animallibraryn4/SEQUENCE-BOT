@@ -1,7 +1,10 @@
 
+
+# [file name]: requirements.txt (updated)
+[file content begin]
 pyrofork
 tgcrypto
 pymongo
 Flask==2.3.3
-moviepy==1.0.3
-pymediainfo==6.1.0
+ffmpeg-python  # Add this for merging functionality
+[file content end]
