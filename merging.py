@@ -4,12 +4,13 @@ import re
 import asyncio
 import tempfile
 import subprocess
+import json
 from pathlib import Path
 from typing import List, Dict, Tuple
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from config import OWNER_ID
-from database import is_subscribed
+from start import is_subscribed  # Fixed import
 
 # Merging state management
 merging_users = {}  # Store user's merging state
@@ -30,7 +31,7 @@ def parse_episode_info(filename: str) -> Dict:
     # Clean the filename
     filename = filename.lower().replace('_', ' ')
     
-    # Try different patterns
+    # Try different patterns - using raw strings for regex
     patterns = [
         r's(\d+)\s*e(\d+)',  # S01E01
         r'season\s*(\d+)\s*episode\s*(\d+)',  # Season 1 Episode 1
@@ -45,22 +46,22 @@ def parse_episode_info(filename: str) -> Dict:
     for pattern in patterns:
         match = re.search(pattern, filename)
         if match:
-            if pattern == 's(\d+)\s*e(\d+)':
+            if pattern == r's(\d+)\s*e(\d+)':
                 season = int(match.group(1))
                 episode = int(match.group(2))
                 break
-            elif pattern == 'season\s*(\d+)\s*episode\s*(\d+)':
+            elif pattern == r'season\s*(\d+)\s*episode\s*(\d+)':
                 season = int(match.group(1))
                 episode = int(match.group(2))
                 break
-            elif pattern == '(\d+)x(\d+)':
+            elif pattern == r'(\d+)x(\d+)':
                 season = int(match.group(1))
                 episode = int(match.group(2))
                 break
-            elif pattern == 'ep\s*(\d+)':
+            elif pattern == r'ep\s*(\d+)':
                 episode = int(match.group(1))
                 break
-            elif pattern == '\s(\d{2,3})\s':
+            elif pattern == r'\s(\d{2,3})\s':
                 episode = int(match.group(1))
                 break
     
@@ -97,7 +98,6 @@ def get_stream_info(file_path: str) -> Dict:
     ]
     
     try:
-        import json
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             data = json.loads(result.stdout)
@@ -131,12 +131,14 @@ def merge_audio_subtitles(source_path: str, target_path: str, output_path: str) 
         cmd.extend(['-map', '0'])
         
         # Map audio streams from second input (source)
-        for i in range(len(source_info.get('audio_streams', []))):
-            cmd.extend(['-map', '1:a:' + str(i)])
+        source_audio_count = len(source_info.get('audio_streams', []))
+        for i in range(source_audio_count):
+            cmd.extend(['-map', f'1:a:{i}'])
         
         # Map subtitle streams from second input (source)
-        for i in range(len(source_info.get('subtitle_streams', []))):
-            cmd.extend(['-map', '1:s:' + str(i)])
+        source_sub_count = len(source_info.get('subtitle_streams', []))
+        for i in range(source_sub_count):
+            cmd.extend(['-map', f'1:s:{i}'])
         
         # Copy codecs (no re-encoding)
         cmd.extend(['-c', 'copy'])
@@ -322,13 +324,16 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
             
             for idx, (source_data, target_data) in enumerate(matched_pairs, 1):
                 # Update progress
-                await progress_msg.edit_text(
-                    f"<blockquote><b>🔄 Merging Files</b></blockquote>\n\n"
-                    f"<blockquote>📊 Progress: {idx}/{len(matched_pairs)}\n"
-                    f"✅ Successful: {success_count}\n"
-                    f"❌ Failed: {failed_count}\n"
-                    f"⏳ Current: {source_data['filename']}</blockquote>"
-                )
+                try:
+                    await progress_msg.edit_text(
+                        f"<blockquote><b>🔄 Merging Files</b></blockquote>\n\n"
+                        f"<blockquote>📊 Progress: {idx}/{len(matched_pairs)}\n"
+                        f"✅ Successful: {success_count}\n"
+                        f"❌ Failed: {failed_count}\n"
+                        f"⏳ Current: {source_data['filename'][:30]}...</blockquote>"
+                    )
+                except:
+                    pass
                 
                 try:
                     # Download source file
@@ -338,12 +343,20 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                         file_name=str(temp_path / f"source_{idx}.mkv")
                     )
                     
+                    if not source_file:
+                        failed_count += 1
+                        continue
+                    
                     # Download target file
                     target_msg = target_data["message"]
                     target_file = await client.download_media(
                         target_msg,
                         file_name=str(temp_path / f"target_{idx}.mkv")
                     )
+                    
+                    if not target_file:
+                        failed_count += 1
+                        continue
                     
                     # Output file path
                     output_file = str(temp_path / f"output_{idx}.mkv")
@@ -367,10 +380,13 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                 except Exception as e:
                     print(f"Error processing file {idx}: {e}")
                     failed_count += 1
-                    await client.send_message(
-                        user_id,
-                        f"<blockquote>❌ Error processing: {target_data['filename']}</blockquote>"
-                    )
+                    try:
+                        await client.send_message(
+                            user_id,
+                            f"<blockquote>❌ Error processing: {target_data['filename']}</blockquote>"
+                        )
+                    except:
+                        pass
                 
                 # Small delay to avoid flooding
                 await asyncio.sleep(1)
@@ -387,10 +403,13 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
             
     except Exception as e:
         print(f"Merge process error: {e}")
-        await progress_msg.edit_text(
-            "<blockquote>❌ An error occurred during merging.</blockquote>\n"
-            "<blockquote>Please try again.</blockquote>"
-        )
+        try:
+            await progress_msg.edit_text(
+                "<blockquote>❌ An error occurred during merging.</blockquote>\n"
+                "<blockquote>Please try again.</blockquote>"
+            )
+        except:
+            pass
     
     finally:
         # Clean up user state
@@ -421,4 +440,4 @@ def get_merging_help_text() -> str:
 - Only new audio/subtitle tracks are added from source
 - No re-encoding (file size optimized)</blockquote>
 """
-#[file content end]
+
