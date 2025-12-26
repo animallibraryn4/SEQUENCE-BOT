@@ -15,6 +15,34 @@ from database import (
 )
 from start import is_subscribed, setup_start_handlers, set_bot_start_time
 
+# Add this at the top of sequence.py after imports
+def check_ffmpeg_available():
+    """Check if FFmpeg is installed and available"""
+    try:
+        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+        return result.returncode == 0
+    except:
+        return False
+
+# Then modify the merging import section
+try:
+    from merging import (
+        merging_command, 
+        handle_merging_files, 
+        process_merging_files,
+        download_file,
+        extract_audio_and_subtitles,
+        user_merging_state
+    )
+    MERGING_AVAILABLE = True
+    if not check_ffmpeg_available():
+        print("⚠️ FFmpeg is not available. Merging feature will be disabled.")
+        MERGING_AVAILABLE = False
+except ImportError as e:
+    print(f"Merging module import error: {e}")
+    MERGING_AVAILABLE = False
+    user_merging_state = {}
+
 # Bot start time for uptime calculation
 BOT_START_TIME = time.time()
 
@@ -892,4 +920,5 @@ def main():
     
     # Run the bot
     app.run()
+
 
