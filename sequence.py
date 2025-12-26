@@ -1,6 +1,9 @@
 import asyncio
 import re
 import time
+import os
+import sys
+import subprocess
 from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -15,7 +18,10 @@ from database import (
 )
 from start import is_subscribed, setup_start_handlers, set_bot_start_time
 
-# Add this at the top of sequence.py after imports
+# Bot start time for uptime calculation
+BOT_START_TIME = time.time()
+
+# Check if FFmpeg is available
 def check_ffmpeg_available():
     """Check if FFmpeg is installed and available"""
     try:
@@ -24,7 +30,7 @@ def check_ffmpeg_available():
     except:
         return False
 
-# Then modify the merging import section
+# Try to import merging module
 try:
     from merging import (
         merging_command, 
@@ -32,7 +38,8 @@ try:
         process_merging_files,
         download_file,
         extract_audio_and_subtitles,
-        user_merging_state
+        user_merging_state,
+        parse_file_info as merging_parse_file_info
     )
     MERGING_AVAILABLE = True
     if not check_ffmpeg_available():
@@ -42,9 +49,6 @@ except ImportError as e:
     print(f"Merging module import error: {e}")
     MERGING_AVAILABLE = False
     user_merging_state = {}
-
-# Bot start time for uptime calculation
-BOT_START_TIME = time.time()
 
 app = Client(
     "sequence_bot", 
@@ -254,8 +258,23 @@ async def sequence_messages(client, messages, mode="per_ep", user_id=None):
     
     return sorted_files, current_mode
 
-# ----------------------- NEW: /sf COMMAND -----------------------
+# ----------------------- NEW: /merging COMMAND -----------------------
+@app.on_message(filters.command("merging"))
+async def merging_cmd(client, message):
+    """Handle /merging command"""
+    if not await is_subscribed(client, message):
+        return
+    
+    if not MERGING_AVAILABLE:
+        await message.reply_text(
+            "<blockquote>❌ Merging feature is not available.</blockquote>\n"
+            "<blockquote>Reason: FFmpeg is required for audio/subtitle merging but is not installed on the server.</blockquote>"
+        )
+        return
+    
+    await merging_command(client, message)
 
+# ----------------------- NEW: /sf COMMAND -----------------------
 @app.on_message(filters.command("sf"))
 async def switch_mode_cmd(client, message):
     """Handle /sf command to switch between File mode and Caption mode"""
@@ -291,7 +310,6 @@ async def switch_mode_cmd(client, message):
     await message.reply_text(text, reply_markup=buttons)
 
 # ----------------------- MODE CALLBACK HANDLER -----------------------
-
 @app.on_callback_query(filters.regex(r'^mode_(file|caption)$|^close_mode$'))
 async def mode_callback_handler(client, query):
     """Handle mode switching callbacks"""
@@ -341,7 +359,6 @@ async def mode_callback_handler(client, query):
         await query.answer("Closed mode settings", show_alert=False)
 
 # ----------------------- SEQUENCE COMMANDS -----------------------
-
 @app.on_message(filters.command("fileseq"))
 async def quality_mode_cmd(client, message):
     if not await is_subscribed(client, message):
@@ -371,7 +388,6 @@ async def quality_mode_cmd(client, message):
     await message.reply_text(text, reply_markup=buttons)
 
 # ----------------------- UPDATED: /ls COMMAND -----------------------
-
 @app.on_message(filters.command("ls"))
 async def ls_command(client, message):
     """Handle /ls command for channel file sequencing"""
@@ -514,7 +530,6 @@ async def handle_ls_links(client, message):
             del user_ls_state[user_id]
 
 # ----------------------- SORTING ENGINE -----------------------
-
 async def send_sequence_files(client, message, user_id):
     if user_id not in user_sequences or not user_sequences[user_id]:
         await message.edit_text("<blockquote>Nᴏ ғɪʟᴇs ɪɴ sᴇǫᴜᴇɴᴄᴇ!</blockquote>")
@@ -566,6 +581,15 @@ async def start_sequence(client, message):
 # 🔥 MODIFIED FUNCTION: store_file - UPDATED WITH FIX AND MODE SUPPORT
 @app.on_message(filters.document | filters.video | filters.audio)
 async def store_file(client, message):
+    # First check if user is in merging mode
+    if MERGING_AVAILABLE:
+        user_id = message.from_user.id
+        if user_id in user_merging_state:
+            # Handle as merging file
+            await handle_merging_files(client, message)
+            return
+    
+    # Check force subscribe
     if not await is_subscribed(client, message):
         return
         
@@ -901,12 +925,27 @@ async def sequence_control_callback(client, query):
         user_sequences.pop(user_id, None)
         await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
+# ----------------------- MERGING CALLBACK HANDLER -----------------------
+@app.on_callback_query(filters.regex(r'^merging_'))
+async def handle_merging_callbacks(client, query):
+    """Handle merging callbacks"""
+    if not MERGING_AVAILABLE:
+        await query.answer("Merging feature not available", show_alert=True)
+        return
+    
+    data = query.data
+    
+    # Extract the callback type
+    if data.startswith("merging_done_source_"):
+        target_user_id = int(data.split("_")[3])
+        
+        if query.from_user.id != target_user_id:
+            await query.answer("This is not for you!", show_alert=True)
+            return
+        
+        if target_user_id not in user_merging_state:
+     
 # ----------------------- MAIN ENTRY POINT -----------------------
-
-# ==================== MERGING FEATURE ====================
-from merging import setup_merging_handlers
-
-# Then in the main() function, add this line:
 def main():
     """Initialize and run the bot"""
     # Set bot start time
@@ -915,10 +954,8 @@ def main():
     # Setup start handlers
     setup_start_handlers(app)
     
-    # Setup merging handlers
-    setup_merging_handlers(app)  # <-- ADD THIS LINE
-    
     # Run the bot
     app.run()
 
-
+if __name__ == "__main__":
+    main()
