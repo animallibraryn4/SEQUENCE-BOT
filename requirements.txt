@@ -1,7 +1,11 @@
-
 pyrofork
 tgcrypto
 pymongo
 Flask==2.3.3
-ffmpeg-python  # Add this for merging functionality
+ffmpeg-python
 
+
+# For Debian/Ubuntu based systems:
+#apt-get update && apt-get install -y ffmpeg mkvtoolnix
+
+# For Alpine Linux:
