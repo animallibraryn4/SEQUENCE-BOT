@@ -7,6 +7,11 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQ
 from pyrogram.errors import UserNotParticipant, FloodWait, ChatAdminRequired, ChannelPrivate
 from config import API_HASH, API_ID, BOT_TOKEN, MONGO_URI, START_PIC, START_MSG, HELP_TXT, COMMAND_TXT, OWNER_ID, FSUB_CHANNEL, FSUB_CHANNEL_2, FSUB_CHANNEL_3
 
+# Add this to imports section
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 # Import from our split modules
 from database import (
     user_sequences, user_notification_msg, update_tasks, 
@@ -14,6 +19,12 @@ from database import (
     users_collection, update_user_stats, get_user_mode, set_user_mode
 )
 from start import is_subscribed, setup_start_handlers, set_bot_start_time
+from merging import (
+    merging_command, 
+    handle_merging_files, 
+    merging_callback_handler,
+    user_merging_state
+)
 
 # Bot start time for uptime calculation
 BOT_START_TIME = time.time()
@@ -485,6 +496,17 @@ async def handle_ls_links(client, message):
         if user_id in user_ls_state:
             del user_ls_state[user_id]
 
+# ----------------------- NEW: /merging COMMAND -----------------------
+
+@app.on_message(filters.command("merging"))
+async def merging_cmd(client, message):
+    """Handle /merging command"""
+    # Check force subscribe first
+    if not await is_subscribed(client, message):
+        return
+    
+    await merging_command(client, message)
+
 # ----------------------- SORTING ENGINE -----------------------
 
 async def send_sequence_files(client, message, user_id):
@@ -535,14 +557,20 @@ async def start_sequence(client, message):
         f"<blockquote>Send your files now</blockquote>"
     )
 
-# 🔥 MODIFIED FUNCTION: store_file - UPDATED WITH FIX AND MODE SUPPORT
+# 🔥 MODIFIED FUNCTION: store_file - UPDATED WITH FIX, MODE SUPPORT, AND MERGING HANDLING
 @app.on_message(filters.document | filters.video | filters.audio)
 async def store_file(client, message):
+    # Check if user is in merging mode
+    user_id = message.from_user.id
+    if user_id in user_merging_state:
+        # Handle as merging file
+        await handle_merging_files(client, message)
+        return
+    
+    # Original sequence mode handling
     if not await is_subscribed(client, message):
         return
         
-    user_id = message.from_user.id
-    
     # Check if we are currently in a sequence session
     if user_id in user_sequences:
         file_obj = message.document or message.video or message.audio
@@ -843,6 +871,13 @@ async def ls_callback_handlers(client, query):
         # Clean up
         if target_user_id in user_ls_state:
             del user_ls_state[target_user_id]
+
+# ----------------------- MERGING CALLBACK HANDLER -----------------------
+
+@app.on_callback_query(filters.regex(r'^merging_'))
+async def handle_merging_callbacks(client, query):
+    """Handle merging callbacks"""
+    await merging_callback_handler(client, query)
 
 # ----------------------- SEQUENCE MODES CALLBACKS -----------------------
 @app.on_callback_query(filters.regex(r'^set_mode_(group|per_ep)$'))
