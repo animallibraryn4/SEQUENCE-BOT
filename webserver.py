@@ -8,7 +8,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "Bot is running!"
+    return "Bot is running with merging feature!"
 
 # Use Render-assigned PORT, fallback to 10000
 port = int(os.environ.get("PORT", 10000))
@@ -20,5 +20,5 @@ def run_server():
 threading.Thread(target=run_server).start()
 
 # Run your existing bot script as a subprocess
-subprocess.run(["python3", "sequence.py"])
+subprocess.run(["python3", "bot.py"])
 
