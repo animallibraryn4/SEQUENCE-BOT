@@ -1,691 +1,496 @@
-
 import os
 import re
 import asyncio
 import tempfile
 import subprocess
 import json
-from pathlib import Path
-from typing import List, Dict, Tuple
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from config import OWNER_ID
-from start import is_subscribed
+from typing import Dict, List, Tuple, Optional
 
-# Merging state management
-merging_users = {}  # Store user's merging state
+# Temporary storage for user states
+user_merging_state = {}  # {user_id: {"step": 1/2/3, "source_files": [], "target_files": [], "current_mode": "file"/"caption"}}
 
-class MergingState:
-    """Track user's merging state"""
-    def __init__(self, user_id: int):
-        self.user_id = user_id
-        self.source_files = []  # List of source file messages
-        self.target_files = []  # List of target file messages
-        self.state = "waiting_for_source"  # waiting_for_source, waiting_for_target, processing
-        self.current_processing = 0
-        self.total_files = 0
+# Parse file info (reusing from sequence.py)
+def parse_file_info(text: str) -> Dict:
+    """Parse file information from text (either filename or caption)"""
+    quality_match = re.search(r'(\d{3,4})[pP]', text)
+    quality = int(quality_match.group(1)) if quality_match else 0
+    clean_name = re.sub(r'\d{3,4}[pP]', '', text)
 
-# --- PARSING ENGINE FOR EPISODE MATCHING ---
-def parse_episode_info(filename: str) -> Dict:
-    """Parse season and episode information from filename"""
-    # Clean the filename
-    filename = filename.lower().replace('_', ' ')
+    season_match = re.search(r'[sS](?:eason)?\s*(\d+)', clean_name)
+    season = int(season_match.group(1)) if season_match else 1
     
-    # Try different patterns - using raw strings for regex
-    patterns = [
-        r's(\d+)\s*e(\d+)',  # S01E01
-        r'season\s*(\d+)\s*episode\s*(\d+)',  # Season 1 Episode 1
-        r'(\d+)x(\d+)',  # 1x01
-        r'ep\s*(\d+)',  # EP 01
-        r'\s(\d{2,3})\s'  # Space separated numbers like " 01 "
-    ]
-    
-    season = 1  # Default season
-    episode = 0
-    
-    for pattern in patterns:
-        match = re.search(pattern, filename)
-        if match:
-            if pattern == r's(\d+)\s*e(\d+)':
-                season = int(match.group(1))
-                episode = int(match.group(2))
-                break
-            elif pattern == r'season\s*(\d+)\s*episode\s*(\d+)':
-                season = int(match.group(1))
-                episode = int(match.group(2))
-                break
-            elif pattern == r'(\d+)x(\d+)':
-                season = int(match.group(1))
-                episode = int(match.group(2))
-                break
-            elif pattern == r'ep\s*(\d+)':
-                episode = int(match.group(1))
-                break
-            elif pattern == r'\s(\d{2,3})\s':
-                episode = int(match.group(1))
-                break
-    
-    return {"season": season, "episode": episode}
+    ep_match = re.search(r'[eE](?:p(?:isode)?)?\s*(\d+)', clean_name)
+    if ep_match:
+        episode = int(ep_match.group(1))
+    else:
+        nums = re.findall(r'\d+', clean_name)
+        episode = int(nums[-1]) if nums else 0
 
-def match_files_by_episode(source_files: List[Dict], target_files: List[Dict]) -> List[Tuple[Dict, Dict]]:
-    """Match source and target files by season and episode"""
-    matched_pairs = []
-    
-    for target in target_files:
-        target_info = parse_episode_info(target.get("filename", ""))
-        
-        # Find matching source file
-        for source in source_files:
-            source_info = parse_episode_info(source.get("filename", ""))
-            
-            if (source_info["season"] == target_info["season"] and 
-                source_info["episode"] == target_info["episode"]):
-                matched_pairs.append((source, target))
-                break
-        else:
-            # If no match found, add None for source
-            matched_pairs.append((None, target))
-    
-    return matched_pairs
+    return {"season": season, "episode": episode, "quality": quality}
 
-# --- IMPROVED FFMPEG UTILITIES ---
 def get_media_info(file_path: str) -> Dict:
     """Get detailed media information using ffprobe"""
     cmd = [
         'ffprobe',
         '-v', 'quiet',
         '-print_format', 'json',
-        '-show_format',
         '-show_streams',
+        '-show_format',
         file_path
     ]
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
             return json.loads(result.stdout)
     except Exception as e:
-        print(f"Error getting media info: {e}")
-    
-    return {"streams": [], "format": {}}
+        print(f"FFprobe error for {file_path}: {e}")
+    return {}
 
-def extract_streams_info(media_info: Dict) -> Dict:
-    """Extract audio and subtitle stream information"""
-    audio_streams = []
-    subtitle_streams = []
-    
-    for stream in media_info.get("streams", []):
-        codec_type = stream.get("codec_type", "")
-        
-        if codec_type == "audio":
-            audio_info = {
-                "index": stream.get("index"),
-                "codec": stream.get("codec_name"),
-                "language": stream.get("tags", {}).get("language", "und"),
-                "channels": stream.get("channels", 2),
-                "title": stream.get("tags", {}).get("title", "")
-            }
-            audio_streams.append(audio_info)
-            
-        elif codec_type == "subtitle":
-            sub_info = {
-                "index": stream.get("index"),
-                "codec": stream.get("codec_name"),
-                "language": stream.get("tags", {}).get("language", "und"),
-                "title": stream.get("tags", {}).get("title", "")
-            }
-            subtitle_streams.append(sub_info)
-    
-    return {
-        "audio_streams": audio_streams,
-        "subtitle_streams": subtitle_streams,
-        "total_streams": len(media_info.get("streams", []))
-    }
-
-def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
+# FFmpeg helper functions
+async def extract_audio_and_subtitles(file_path: str, output_dir: str) -> Tuple[List[str], List[str]]:
     """
-    Merge audio and subtitle tracks from source to target without re-encoding
-    Improved version with better stream handling
+    Extract audio and subtitle tracks from video file using FFmpeg.
+    Returns: (audio_files_list, subtitle_files_list)
+    """
+    audio_files = []
+    subtitle_files = []
+    
+    try:
+        # Get media info first
+        media_info = get_media_info(file_path)
+        if not media_info:
+            return audio_files, subtitle_files
+        
+        streams = media_info.get('streams', [])
+        
+        # Find audio streams
+        audio_streams = [i for i, stream in enumerate(streams) 
+                        if stream.get('codec_type') == 'audio']
+        
+        # Find subtitle streams
+        subtitle_streams = [i for i, stream in enumerate(streams) 
+                          if stream.get('codec_type') == 'subtitle']
+        
+        # Extract audio tracks
+        for idx, stream_idx in enumerate(audio_streams):
+            audio_output = os.path.join(output_dir, f'audio_{idx}.m4a')
+            audio_cmd = [
+                'ffmpeg',
+                '-i', file_path,
+                '-map', f'0:{stream_idx}',
+                '-c:a', 'aac',  # Convert to AAC for better compatibility
+                '-b:a', '192k',
+                audio_output,
+                '-y',
+                '-hide_banner',
+                '-loglevel', 'error'
+            ]
+            
+            try:
+                result = subprocess.run(audio_cmd, capture_output=True, text=True, timeout=120)
+                if result.returncode == 0 and os.path.exists(audio_output):
+                    audio_files.append(audio_output)
+                    print(f"Extracted audio track {idx} to {audio_output}")
+            except subprocess.TimeoutExpired:
+                print(f"Timeout extracting audio track {idx} from {file_path}")
+            except Exception as e:
+                print(f"Error extracting audio track {idx}: {e}")
+        
+        # Extract subtitle tracks
+        for idx, stream_idx in enumerate(subtitle_streams):
+            # Get subtitle codec to determine extension
+            codec_name = streams[stream_idx].get('codec_name', 'mov_text')
+            
+            # Choose appropriate extension
+            if codec_name in ['ass', 'ssa']:
+                ext = 'ass'
+                codec = 'ass'
+            elif codec_name == 'webvtt':
+                ext = 'vtt'
+                codec = 'webvtt'
+            else:  # Default to SRT
+                ext = 'srt'
+                codec = 'srt'
+            
+            subtitle_output = os.path.join(output_dir, f'subtitle_{idx}.{ext}')
+            subtitle_cmd = [
+                'ffmpeg',
+                '-i', file_path,
+                '-map', f'0:{stream_idx}',
+                '-c:s', codec,
+                subtitle_output,
+                '-y',
+                '-hide_banner',
+                '-loglevel', 'error'
+            ]
+            
+            try:
+                result = subprocess.run(subtitle_cmd, capture_output=True, text=True, timeout=120)
+                if result.returncode == 0 and os.path.exists(subtitle_output):
+                    subtitle_files.append(subtitle_output)
+                    print(f"Extracted subtitle track {idx} to {subtitle_output}")
+            except subprocess.TimeoutExpired:
+                print(f"Timeout extracting subtitle track {idx} from {file_path}")
+            except Exception as e:
+                print(f"Error extracting subtitle track {idx}: {e}")
+                
+    except Exception as e:
+        print(f"Error extracting tracks from {file_path}: {e}")
+    
+    return audio_files, subtitle_files
+
+async def merge_tracks_into_file(source_tracks: Dict, target_file: str, output_file: str) -> bool:
+    """
+    Merge extracted audio and subtitle tracks into target file without re-encoding video.
     """
     try:
-        # Get media information
-        source_info = get_media_info(source_path)
-        target_info = get_media_info(target_path)
-        
-        if not source_info or not target_info:
-            print("Failed to get media info")
+        # Get target file info
+        target_info = get_media_info(target_file)
+        if not target_info:
             return False
         
-        # Extract stream information
-        source_streams = extract_streams_info(source_info)
-        target_streams = extract_streams_info(target_info)
-        
-        print(f"Source: {len(source_streams['audio_streams'])} audio, {len(source_streams['subtitle_streams'])} subtitle streams")
-        print(f"Target: {len(target_streams['audio_streams'])} audio, {len(target_streams['subtitle_streams'])} subtitle streams")
-        
         # Build ffmpeg command
-        cmd = ['ffmpeg', '-y']
+        cmd = ['ffmpeg']
         
-        # Input files
-        cmd.extend(['-i', target_path])
-        cmd.extend(['-i', source_path])
+        # Add target file as input
+        cmd.extend(['-i', target_file])
         
-        # Map ALL streams from target (input 0)
-        cmd.extend(['-map', '0'])
+        # Add audio inputs
+        audio_files = source_tracks.get('audio', [])
+        for audio_file in audio_files:
+            if os.path.exists(audio_file):
+                cmd.extend(['-i', audio_file])
         
-        # Map audio streams from source (input 1)
-        if source_streams['audio_streams']:
-            cmd.extend(['-map', '1:a'])
+        # Add subtitle inputs
+        subtitle_files = source_tracks.get('subtitles', [])
+        for subtitle_file in subtitle_files:
+            if os.path.exists(subtitle_file):
+                cmd.extend(['-i', subtitle_file])
         
-        # Map subtitle streams from source (input 1)
-        if source_streams['subtitle_streams']:
-            cmd.extend(['-map', '1:s'])
+        # Map streams starting with original video
+        cmd.extend(['-map', '0:v:0'])
         
-        # Copy all codecs (no re-encoding)
-        cmd.extend(['-c', 'copy'])
+        # Map all original audio tracks (if any)
+        target_streams = target_info.get('streams', [])
+        audio_count = sum(1 for s in target_streams if s.get('codec_type') == 'audio')
+        for i in range(audio_count):
+            cmd.extend(['-map', f'0:a:{i}'])
         
-        # Disposition handling - preserve target dispositions, add source as default
-        # Get total streams count after mapping
-        total_target_streams = target_streams['total_streams']
-        total_source_audio = len(source_streams['audio_streams'])
-        total_source_sub = len(source_streams['subtitle_streams'])
+        # Map all extracted audio tracks
+        for i in range(len(audio_files)):
+            cmd.extend(['-map', f'{i+1}:a:0'])
         
-        # Set dispositions: target streams keep their dispositions
-        # Source audio/subtitles get default disposition
-        stream_idx = total_target_streams
+        # Map all original subtitle tracks (if any)
+        subtitle_count = sum(1 for s in target_streams if s.get('codec_type') == 'subtitle')
+        for i in range(subtitle_count):
+            cmd.extend(['-map', f'0:s:{i}'])
         
-        # Set source audio streams to default disposition
-        for i in range(total_source_audio):
-            cmd.extend(['-disposition:a:{}'.format(stream_idx), 'default'])
-            stream_idx += 1
+        # Map all extracted subtitle tracks
+        offset = len(audio_files) + 1
+        for i in range(len(subtitle_files)):
+            cmd.extend(['-map', f'{offset + i}:s:0'])
         
-        # Set source subtitle streams to default disposition
-        for i in range(total_source_sub):
-            cmd.extend(['-disposition:s:{}'.format(stream_idx), 'default'])
-            stream_idx += 1
+        # Codec settings
+        # Copy video codec (no re-encoding)
+        cmd.extend(['-c:v', 'copy'])
         
-        # Set metadata
-        cmd.extend(['-metadata:s:a', 'handler="Added from source file"'])
-        cmd.extend(['-metadata:s:s', 'handler="Added from source file"'])
+        # Copy original audio tracks (no re-encoding)
+        for i in range(audio_count):
+            cmd.extend([f'-c:a:{i}', 'copy'])
+        
+        # Convert extracted audio tracks to AAC for compatibility
+        for i in range(len(audio_files)):
+            cmd.extend([f'-c:a:{audio_count + i}', 'aac'])
+        
+        # Copy subtitle codecs
+        cmd.extend(['-c:s', 'copy'])
+        
+        # Metadata
+        cmd.extend(['-metadata', 'title=Merged File'])
+        
+        # Avoid duplicate streams
+        cmd.extend(['-max_interleave_delta', '0'])
         
         # Output file
-        cmd.append(output_path)
+        cmd.append(output_file)
+        cmd.append('-y')
+        cmd.extend(['-hide_banner', '-loglevel', 'info'])
         
         print(f"Running FFmpeg command: {' '.join(cmd)}")
         
-        # Run ffmpeg
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Run ffmpeg with timeout
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         
-        if result.returncode == 0:
-            print("Merge successful!")
-            
-            # Verify output
-            output_info = get_media_info(output_path)
-            output_streams = extract_streams_info(output_info)
-            
-            print(f"Output: {len(output_streams['audio_streams'])} audio, {len(output_streams['subtitle_streams'])} subtitle streams")
-            
-            # Check if streams were added
-            expected_audio = len(target_streams['audio_streams']) + len(source_streams['audio_streams'])
-            expected_sub = len(target_streams['subtitle_streams']) + len(source_streams['subtitle_streams'])
-            
-            actual_audio = len(output_streams['audio_streams'])
-            actual_sub = len(output_streams['subtitle_streams'])
-            
-            print(f"Expected: {expected_audio} audio, {expected_sub} subtitle streams")
-            print(f"Actual: {actual_audio} audio, {actual_sub} subtitle streams")
-            
-            return True
+        if result.returncode != 0:
+            print(f"FFmpeg error output: {result.stderr}")
+            return False
+        
+        # Verify the output file
+        if os.path.exists(output_file):
+            output_info = get_media_info(output_file)
+            if output_info:
+                # Check if file has audio streams
+                output_streams = output_info.get('streams', [])
+                has_audio = any(s.get('codec_type') == 'audio' for s in output_streams)
+                has_video = any(s.get('codec_type') == 'video' for s in output_streams)
+                
+                if has_video and has_audio:
+                    print(f"Successfully created merged file: {output_file}")
+                    print(f"Streams in output: {[(s.get('codec_type'), s.get('codec_name')) for s in output_streams]}")
+                    return True
+                else:
+                    print(f"Output file missing audio or video streams")
+                    return False
+            else:
+                print(f"Could not get info for output file")
+                return False
         else:
-            print(f"FFmpeg error (return code {result.returncode}):")
-            print(f"Stderr: {result.stderr[:500]}")
+            print(f"Output file not created")
             return False
             
+    except subprocess.TimeoutExpired:
+        print(f"Timeout merging tracks for {target_file}")
+        return False
     except Exception as e:
-        print(f"Merge error: {str(e)}")
+        print(f"Error merging tracks for {target_file}: {e}")
         import traceback
         traceback.print_exc()
         return False
 
-def get_file_extension(file_path: str) -> str:
-    """Get file extension from path"""
-    return Path(file_path).suffix.lower()
-
-def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
-    """
-    Simple but reliable merging using mkvmerge (if available)
-    """
+async def download_file(client, message, download_path: str) -> Optional[str]:
+    """Download a file from Telegram message"""
     try:
-        # First try using mkvmerge (more reliable for MKV files)
-        mkvmerge_cmd = [
-            'mkvmerge',
-            '-o', output_path,
-            target_path,
-            '--no-audio',
-            '--no-subtitles',
-            source_path,
-            '--no-video',
-            '--no-chapters',
-            '--no-attachments',
-            '--no-track-tags',
-            '--no-global-tags'
-        ]
+        file_name = ""
+        if message.document:
+            file_name = message.document.file_name
+        elif message.video:
+            file_name = message.video.file_name or f"video_{message.id}.mp4"
+        elif message.audio:
+            file_name = message.audio.file_name or f"audio_{message.id}.mp3"
         
-        result = subprocess.run(mkvmerge_cmd, capture_output=True, text=True)
+        if not file_name:
+            file_name = f"file_{message.id}.bin"
         
-        if result.returncode == 0:
-            print("Merge successful with mkvmerge!")
-            return True
-        else:
-            print(f"mkvmerge failed, trying FFmpeg...")
-            
-            # Fallback to FFmpeg
-            return merge_audio_subtitles_v2(source_path, target_path, output_path)
-            
-    except FileNotFoundError:
-        # mkvmerge not available, use FFmpeg
-        print("mkvmerge not found, using FFmpeg...")
-        return merge_audio_subtitles_v2(source_path, target_path, output_path)
+        # Clean filename
+        file_name = "".join(c for c in file_name if c.isalnum() or c in (' ', '.', '-', '_')).rstrip()
+        full_path = os.path.join(download_path, file_name)
+        
+        # Download the file
+        await client.download_media(message, file_name=full_path)
+        
+        return full_path
     except Exception as e:
-        print(f"mkvmerge error: {e}, trying FFmpeg...")
-        return merge_audio_subtitles_v2(source_path, target_path, output_path)
+        print(f"Error downloading file: {e}")
+        return None
 
-# --- TELEGRAM BOT HANDLERS ---
-def setup_merging_handlers(app: Client):
-    """Setup all merging-related handlers"""
+async def process_merging_files(client, user_id: int, chat_id: int):
+    """Process merging operation for a user"""
+    if user_id not in user_merging_state:
+        return
     
-    @app.on_message(filters.command("merging"))
-    async def merging_command(client: Client, message: Message):
-        """Start the merging process"""
-        if not await is_subscribed(client, message):
-            return
+    state = user_merging_state[user_id]
+    source_files = state.get("source_files", [])
+    target_files = state.get("target_files", [])
+    extracted_tracks_data = state.get("extracted_tracks", {})
+    
+    if not source_files or not target_files:
+        return
+    
+    # Create temp directory for processing
+    with tempfile.TemporaryDirectory() as temp_dir:
+        processed_count = 0
+        failed_count = 0
         
-        user_id = message.from_user.id
-        
-        # Initialize merging state
-        merging_users[user_id] = MergingState(user_id)
-        
-        help_text = (
-            "<blockquote><b>🔧 AUTO FILE MERGING MODE</b></blockquote>\n\n"
-            "<blockquote>Please send the SOURCE FILES from which you want to extract audio and subtitles.</blockquote>\n\n"
-            "<blockquote><b>📝 Instructions:</b>\n"
-            "1. Send all source files (with desired audio/subtitle tracks)\n"
-            "2. Send <code>/done</code> when finished\n"
-            "3. Send all target files (to add tracks to)\n"
-            "4. Send <code>/done</code> again\n"
-            "5. Wait for processing</blockquote>\n\n"
-            "<blockquote><b>⚠️ Requirements:</b>\n"
-            "- Files should be MKV format for best results\n"
-            "- Files should have similar naming for auto-matching\n"
-            "- Bot needs ffmpeg installed on server</blockquote>"
+        # Send processing message
+        status_msg = await client.send_message(
+            chat_id,
+            f"<blockquote>🔄 Processing {len(target_files)} files...\n"
+            f"Progress: 0/{len(target_files)}</blockquote>"
         )
         
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_merge_cmd")]
-        ])
-        
-        await message.reply_text(help_text, reply_markup=buttons)
-    
-    @app.on_callback_query(filters.regex(r"^cancel_merge_cmd$"))
-    async def cancel_merge_callback(client, query):
-        """Handle cancel button callback"""
-        user_id = query.from_user.id
-        
-        if user_id in merging_users:
-            del merging_users[user_id]
-        
-        await query.message.edit_text(
-            "<blockquote><b>❌ Merge process cancelled.</b></blockquote>"
-        )
-        await query.answer("Merge cancelled")
-    
-    @app.on_message(filters.document | filters.video)
-    async def handle_merging_files(client: Client, message: Message):
-        """Handle files sent during merging process"""
-        if not await is_subscribed(client, message):
-            return
-        
-        user_id = message.from_user.id
-        
-        if user_id not in merging_users:
-            return
-        
-        state = merging_users[user_id]
-        file_obj = message.document or message.video
-        
-        if not file_obj:
-            return
-        
-        # Get filename
-        filename = file_obj.file_name or f"file_{message.id}"
-        mime_type = file_obj.mime_type or ""
-        
-        # Check if it's a video file
-        if not any(x in mime_type for x in ['video', 'octet-stream', 'x-matroska']):
-            await message.reply_text(
-                f"<blockquote>⚠️ Skipping non-video file: {filename}</blockquote>"
-            )
-            return
-        
-        file_data = {
-            "message": message,
-            "filename": filename,
-            "file_id": file_obj.file_id,
-            "file_size": file_obj.file_size,
-            "mime_type": mime_type
-        }
-        
-        if state.state == "waiting_for_source":
-            state.source_files.append(file_data)
-            
-            # Send confirmation
-            if len(state.source_files) % 3 == 0 or len(state.source_files) == 1:
-                await message.reply_text(
-                    f"<blockquote>📥 Received {len(state.source_files)} source files.</blockquote>\n"
-                    f"<blockquote>Send <code>/done</code> when finished with source files.</blockquote>"
-                )
+        for idx, target_file_data in enumerate(target_files, 1):
+            try:
+                # Parse target file info
+                target_info = parse_file_info(target_file_data.get("filename", ""))
+                target_season = target_info["season"]
+                target_episode = target_info["episode"]
                 
-        elif state.state == "waiting_for_target":
-            state.target_files.append(file_data)
-            
-            # Send confirmation
-            if len(state.target_files) % 3 == 0 or len(state.target_files) == 1:
-                await message.reply_text(
-                    f"<blockquote>📥 Received {len(state.target_files)} target files.</blockquote>\n"
-                    f"<blockquote>Send <code>/done</code> when finished with target files.</blockquote>"
-                )
-    
-    @app.on_message(filters.command("done"))
-    async def done_command(client: Client, message: Message):
-        """Handle /done command to proceed to next step"""
-        if not await is_subscribed(client, message):
-            return
-        
-        user_id = message.from_user.id
-        
-        if user_id not in merging_users:
-            await message.reply_text(
-                "<blockquote>❌ No active merging session. Use <code>/merging</code> to start.</blockquote>"
-            )
-            return
-        
-        state = merging_users[user_id]
-        
-        if state.state == "waiting_for_source":
-            if not state.source_files:
-                await message.reply_text(
-                    "<blockquote>❌ No source files received yet.</blockquote>\n"
-                    "<blockquote>Please send source files first.</blockquote>"
-                )
-                return
-            
-            state.state = "waiting_for_target"
-            
-            await message.reply_text(
-                f"<blockquote><b>✅ Source files received!</b></blockquote>\n\n"
-                f"<blockquote>Total source files: {len(state.source_files)}</blockquote>\n\n"
-                f"<blockquote><b>Now send me the TARGET files.</b></blockquote>\n\n"
-                f"<blockquote><i>📝 Note: Send the same number of target files</i></blockquote>"
-            )
-            
-        elif state.state == "waiting_for_target":
-            if not state.target_files:
-                await message.reply_text(
-                    "<blockquote>❌ No target files received yet.</blockquote>\n"
-                    "<blockquote>Please send target files first.</blockquote>"
-                )
-                return
-            
-            # Check if counts match
-            if len(state.source_files) != len(state.target_files):
-                await message.reply_text(
-                    f"<blockquote>⚠️ File count mismatch!</blockquote>\n\n"
-                    f"<blockquote>Source files: {len(state.source_files)}\n"
-                    f"Target files: {len(state.target_files)}</blockquote>\n\n"
-                    f"<blockquote>You can continue anyway, but only matching episodes will be processed.</blockquote>",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ Continue Anyway", callback_data="continue_merge")],
-                        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_merge")]
-                    ])
-                )
-                return
-            
-            # Start processing
-            await start_merging_process(client, state, message)
-            
-        else:
-            await message.reply_text(
-                "<blockquote>❌ Invalid state. Use <code>/cancel_merge</code> to reset.</blockquote>"
-            )
-    
-    @app.on_callback_query(filters.regex(r"^(continue_merge|cancel_merge)$"))
-    async def merge_control_callback(client, query):
-        """Handle merge control callbacks"""
-        user_id = query.from_user.id
-        action = query.data
-        
-        if user_id not in merging_users:
-            await query.answer("Session expired", show_alert=True)
-            return
-        
-        state = merging_users[user_id]
-        
-        if action == "continue_merge":
-            await query.message.delete()
-            await start_merging_process(client, state, query.message)
-            
-        elif action == "cancel_merge":
-            if user_id in merging_users:
-                del merging_users[user_id]
-            await query.message.edit_text(
-                "<blockquote><b>❌ Merge process cancelled.</b></blockquote>"
-            )
-            await query.answer("Merge cancelled")
-    
-    @app.on_message(filters.command("cancel_merge"))
-    async def cancel_merge_command(client: Client, message: Message):
-        """Cancel the merging process"""
-        if not await is_subscribed(client, message):
-            return
-        
-        user_id = message.from_user.id
-        
-        if user_id in merging_users:
-            del merging_users[user_id]
-            await message.reply_text(
-                "<blockquote><b>❌ Merge process cancelled.</b></blockquote>"
-            )
-        else:
-            await message.reply_text(
-                "<blockquote>❌ No active merging session to cancel.</blockquote>"
-            )
-
-async def start_merging_process(client: Client, state: MergingState, message: Message):
-    """Start the merging process"""
-    user_id = state.user_id
-    state.state = "processing"
-    state.total_files = min(len(state.source_files), len(state.target_files))
-    
-    # Send initial processing message
-    progress_msg = await message.reply_text(
-        f"<blockquote><b>🔄 Starting Merge Process</b></blockquote>\n\n"
-        f"<blockquote>📊 Matching files...\n"
-        f"⏳ Please wait...</blockquote>"
-    )
-    
-    # Start the merging process in background
-    asyncio.create_task(process_merging(client, state, progress_msg))
-
-async def process_merging(client: Client, state: MergingState, progress_msg: Message):
-    """Process the merging of all files"""
-    user_id = state.user_id
-    
-    try:
-        # Create temporary directory
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            
-            # Match files by episode
-            matched_pairs = match_files_by_episode(
-                state.source_files, 
-                state.target_files
-            )
-            
-            # Filter out pairs without source
-            valid_pairs = [(s, t) for s, t in matched_pairs if s is not None]
-            
-            if not valid_pairs:
-                await progress_msg.edit_text(
-                    "<blockquote>❌ No matching episodes found!</blockquote>\n\n"
-                    "<blockquote>Could not match source and target files by season/episode.</blockquote>"
-                )
-                return
-            
-            # Process each matched pair
-            success_count = 0
-            failed_count = 0
-            skipped_count = len(matched_pairs) - len(valid_pairs)
-            
-            for idx, (source_data, target_data) in enumerate(valid_pairs, 1):
-                # Update progress
-                try:
-                    progress_text = (
-                        f"<blockquote><b>🔄 Merging Files</b></blockquote>\n\n"
-                        f"<blockquote>📊 Progress: {idx}/{len(valid_pairs)}\n"
-                        f"✅ Successful: {success_count}\n"
-                        f"❌ Failed: {failed_count}\n"
-                        f"⏳ Current: Episode {idx}</blockquote>"
-                    )
-                    await progress_msg.edit_text(progress_text)
-                except:
-                    pass
+                # Find matching source tracks
+                source_tracks = None
+                if str(target_season) in extracted_tracks_data:
+                    season_data = extracted_tracks_data[str(target_season)]
+                    if str(target_episode) in season_data:
+                        source_tracks = season_data[str(target_episode)]
                 
-                try:
-                    # Download source file
-                    source_filename = f"source_{idx}{get_file_extension(source_data['filename'])}"
-                    source_file = await client.download_media(
-                        source_data["message"],
-                        file_name=str(temp_path / source_filename)
-                    )
-                    
-                    if not source_file:
-                        print(f"Failed to download source file {idx}")
-                        failed_count += 1
-                        continue
-                    
+                if source_tracks and (source_tracks.get("audio") or source_tracks.get("subtitles")):
                     # Download target file
-                    target_filename = f"target_{idx}{get_file_extension(target_data['filename'])}"
-                    target_file = await client.download_media(
-                        target_data["message"],
-                        file_name=str(temp_path / target_filename)
+                    target_path = await download_file(
+                        client,
+                        target_file_data["message"],
+                        temp_dir
                     )
                     
-                    if not target_file:
-                        print(f"Failed to download target file {idx}")
-                        failed_count += 1
-                        continue
-                    
-                    # Output file path - keep original target filename
-                    output_filename = f"merged_{target_data['filename']}"
-                    output_file = str(temp_path / output_filename)
-                    
-                    print(f"Processing pair {idx}:")
-                    print(f"  Source: {source_data['filename']}")
-                    print(f"  Target: {target_data['filename']}")
-                    print(f"  Output: {output_filename}")
-                    
-                    # Merge audio and subtitles using improved method
-                    if merge_audio_subtitles_simple(source_file, target_file, output_file):
-                        # Upload merged file
-                        await client.send_document(
-                            chat_id=user_id,
-                            document=output_file,
-                            caption=(
-                                f"<blockquote>✅ <b>Merged File</b></blockquote>\n"
-                                f"<blockquote>📁 {target_data['filename']}</blockquote>\n"
-                                f"<blockquote>🎵 Audio tracks added from source</blockquote>\n"
-                                f"<blockquote>📝 Subtitle tracks added from source</blockquote>"
-                            )
+                    if target_path and os.path.exists(target_path):
+                        # Create output file name (keep original name)
+                        original_name = os.path.basename(target_path)
+                        name_without_ext = os.path.splitext(original_name)[0]
+                        output_name = f"{name_without_ext}_merged.mp4"
+                        output_path = os.path.join(temp_dir, output_name)
+                        
+                        # Check target file first
+                        print(f"Processing file {idx}: {original_name}")
+                        print(f"Source tracks available: Audio={len(source_tracks.get('audio', []))}, Subtitles={len(source_tracks.get('subtitles', []))}")
+                        
+                        # Get target file info
+                        target_media_info = get_media_info(target_path)
+                        if target_media_info:
+                            target_streams = target_media_info.get('streams', [])
+                            print(f"Target file streams: {[(s.get('codec_type'), s.get('codec_name')) for s in target_streams]}")
+                        
+                        # Merge tracks
+                        success = await merge_tracks_into_file(
+                            source_tracks,
+                            target_path,
+                            output_path
                         )
-                        success_count += 1
-                        print(f"Successfully merged file {idx}")
+                        
+                        if success and os.path.exists(output_path):
+                            # Send merged file back to user
+                            await client.send_document(
+                                chat_id,
+                                document=output_path,
+                                caption=f"✅ Merged: {original_name}\n\nAdded {len(source_tracks.get('audio', []))} audio track(s) and {len(source_tracks.get('subtitles', []))} subtitle track(s)"
+                            )
+                            processed_count += 1
+                        else:
+                            failed_count += 1
+                            
+                            # Send original file if merging failed
+                            if os.path.exists(target_path):
+                                await client.send_document(
+                                    chat_id,
+                                    document=target_path,
+                                    caption=f"⚠️ Original (merge failed): {original_name}"
+                                )
                     else:
                         failed_count += 1
                         await client.send_message(
-                            user_id,
-                            f"<blockquote>❌ Failed to merge: {target_data['filename']}</blockquote>\n"
-                            f"<blockquote><i>This file may be incompatible or corrupted.</i></blockquote>"
+                            chat_id,
+                            f"<blockquote>❌ Failed to download target file {idx}</blockquote>"
                         )
-                        print(f"Failed to merge file {idx}")
-                    
-                except Exception as e:
-                    print(f"Error processing file {idx}: {str(e)}")
+                else:
                     failed_count += 1
-                    try:
-                        await client.send_message(
-                            user_id,
-                            f"<blockquote>❌ Error processing: {target_data['filename']}</blockquote>\n"
-                            f"<blockquote><i>Error: {str(e)[:100]}</i></blockquote>"
-                        )
-                    except:
-                        pass
+                    await client.send_message(
+                        chat_id,
+                        f"<blockquote>❌ No matching tracks found for Season {target_season} Episode {target_episode}</blockquote>"
+                    )
+                
+                # Update status
+                current = processed_count + failed_count
+                await status_msg.edit_text(
+                    f"<blockquote>🔄 Processing {len(target_files)} files...\n"
+                    f"Progress: {current}/{len(target_files)}\n"
+                    f"✅ Success: {processed_count} | ❌ Failed: {failed_count}</blockquote>"
+                )
                 
                 # Small delay to avoid flooding
-                await asyncio.sleep(2)
-            
-            # Final summary
-            summary = (
-                f"<blockquote><b>📊 Merge Process Complete!</b></blockquote>\n\n"
-                f"<blockquote>✅ Successful: {success_count}\n"
-                f"❌ Failed: {failed_count}\n"
-                f"⏭️ Skipped (no match): {skipped_count}\n"
-                f"📁 Total Processed: {len(valid_pairs)}</blockquote>\n\n"
-            )
-            
-            if success_count > 0:
-                summary += "<blockquote>🎉 Merged files have been sent to you!</blockquote>"
-            
-            await progress_msg.edit_text(summary)
-            
-    except Exception as e:
-        print(f"Merge process error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        try:
-            await progress_msg.edit_text(
-                "<blockquote>❌ An error occurred during merging.</blockquote>\n"
-                "<blockquote>Please try again with different files.</blockquote>"
-            )
-        except:
-            pass
+                await asyncio.sleep(3)
+                
+            except Exception as e:
+                print(f"Error processing file {idx}: {e}")
+                import traceback
+                traceback.print_exc()
+                failed_count += 1
+                continue
+        
+        # Final status
+        await status_msg.edit_text(
+            f"<blockquote><b>✅ Merging Complete!</b></blockquote>\n"
+            f"<blockquote>Total files: {len(target_files)}\n"
+            f"✅ Successfully merged: {processed_count}\n"
+            f"❌ Failed/skipped: {failed_count}</blockquote>"
+        )
+        
+        # Cleanup
+        if user_id in user_merging_state:
+            del user_merging_state[user_id]
+
+# Command handler
+async def merging_command(client, message):
+    """Handle /merging command"""
+    user_id = message.from_user.id
     
-    finally:
-        # Clean up user state
-        if user_id in merging_users:
-            del merging_users[user_id]
+    # Initialize merging state
+    user_merging_state[user_id] = {
+        "step": 1,  # 1 = waiting for source files, 2 = waiting for target files
+        "source_files": [],
+        "target_files": [],
+        "extracted_tracks": {},
+        "temp_dir": None
+    }
+    
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    
+    await message.reply_text(
+        "<blockquote><b>🔀 MERGING MODE ACTIVATED</b></blockquote>\n\n"
+        "<blockquote><b>Step 1/2:</b> Send the <b>SOURCE FILES</b> from which you want to extract audio and subtitles.\n\n"
+        "ℹ️ <i>Send all source files first, then click the button below.</i></blockquote>",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Done with Source Files", callback_data=f"merging_done_source_{user_id}")],
+            [InlineKeyboardButton("❌ Cancel Merging", callback_data=f"merging_cancel_{user_id}")]
+        ])
+    )
 
-# --- HELP TEXT UPDATE ---
-def get_merging_help_text() -> str:
-    """Get help text for merging commands"""
-    return """
-<blockquote><b>🔧 Auto File Merging Commands</b></blockquote>
-
-<blockquote><b>/merging</b> - Start auto file merging process
-<b>/done</b> - Proceed to next step after sending files
-<b>/cancel_merge</b> - Cancel current merging process</blockquote>
-
-<blockquote><b>📝 How to use:</b>
-1. Send <code>/merging</code>
-2. Send all SOURCE files (with desired audio/subtitle tracks)
-3. Send <code>/done</code>
-4. Send all TARGET files (to add tracks to)
-5. Send <code>/done</code> again
-6. Wait for processing to complete</blockquote>
-
-<blockquote><b>⚠️ Important Notes:</b>
-- Files are matched by season and episode numbers
-- MKV format works best for merging
-- Original target file tracks are preserved
-- Only new audio/subtitle tracks are added from source
-- No re-encoding (file size optimized)</blockquote>
-"""
+# File handler for merging
+async def handle_merging_files(client, message):
+    """Handle files sent during merging mode"""
+    user_id = message.from_user.id
+    
+    if user_id not in user_merging_state:
+        return
+    
+    state = user_merging_state[user_id]
+    step = state["step"]
+    
+    # Check if it's a media file
+    if not (message.document or message.video or message.audio):
+        return
+    
+    # Parse file info from filename or caption
+    if message.caption:
+        text_to_parse = message.caption
+    else:
+        file_obj = message.document or message.video or message.audio
+        file_name = file_obj.file_name if file_obj else f"file_{message.id}"
+        text_to_parse = file_name
+    
+    file_info = parse_file_info(text_to_parse)
+    
+    if step == 1:
+        # Source files
+        state["source_files"].append({
+            "message": message,
+            "filename": text_to_parse,
+            "info": file_info
+        })
+        
+        count = len(state["source_files"])
+        await message.reply_text(
+            f"<blockquote>✅ Source file #{count} received.\n"
+            f"Season {file_info['season']}, Episode {file_info['episode']}</blockquote>"
+        )
+        
+    elif step == 2:
+        # Target files
+        state["target_files"].append({
+            "message": message,
+            "filename": text_to_parse,
+            "info": file_info
+        })
+        
+        count = len(state["target_files"])
+        await message.reply_text(
+            f"<blockquote>✅ Target file #{count} received.\n"
+            f"Season {file_info['season']}, Episode {file_info['episode']}</blockquote>"
+        )
