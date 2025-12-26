@@ -937,14 +937,15 @@ async def handle_merging_callbacks(client, query):
     
     # Extract the callback type
     if data.startswith("merging_done_source_"):
-        target_user_id = int(data.split("_")[3])
-        
-        if query.from_user.id != target_user_id:
-            await query.answer("This is not for you!", show_alert=True)
+        target_user_id = int(data.split("_")[3])    
+
+        if target_user_id not in user_merging_state:
+            await query.answer("Session expired. Please start again.", show_alert=True)
             return
         
-        if target_user_id not in user_merging_state:
-     
+        # Add your merging logic here...
+        await query.answer("Processing...")
+
 # ----------------------- MAIN ENTRY POINT -----------------------
 def main():
     """Initialize and run the bot"""
@@ -957,8 +958,6 @@ def main():
     # Run the bot
     app.run()
 
-
 if __name__ == "__main__":
     main()
-
 
