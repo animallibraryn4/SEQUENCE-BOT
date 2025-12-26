@@ -1,5 +1,6 @@
 
 import asyncio
+import merging
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN
 import sequence  # This will register sequence handlers
@@ -32,3 +33,12 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+
+  # Changed from 'from merging import setup_merging_handlers'
+
+def main():
+    # setup_start_handlers(app) 
+    # If merging.py handles its own registration upon import, 
+    # you can comment out the setup_merging_handlers(app) line.
+    
