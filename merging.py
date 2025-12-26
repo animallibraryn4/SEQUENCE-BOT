@@ -79,8 +79,9 @@ async def extract_audio_and_subtitles(file_path: str, output_dir: str) -> Tuple[
                 'ffmpeg',
                 '-i', file_path,
                 '-map', f'0:{stream_idx}',
-                '-c:a', 'aac',  # Convert to AAC for better compatibility
+                '-c:a', 'aac',
                 '-b:a', '192k',
+                '-ac', '2',  # Convert to stereo
                 audio_output,
                 '-y',
                 '-hide_banner',
@@ -92,33 +93,16 @@ async def extract_audio_and_subtitles(file_path: str, output_dir: str) -> Tuple[
                 if result.returncode == 0 and os.path.exists(audio_output):
                     audio_files.append(audio_output)
                     print(f"Extracted audio track {idx} to {audio_output}")
-            except subprocess.TimeoutExpired:
-                print(f"Timeout extracting audio track {idx} from {file_path}")
             except Exception as e:
                 print(f"Error extracting audio track {idx}: {e}")
         
         # Extract subtitle tracks
         for idx, stream_idx in enumerate(subtitle_streams):
-            # Get subtitle codec to determine extension
-            codec_name = streams[stream_idx].get('codec_name', 'mov_text')
-            
-            # Choose appropriate extension
-            if codec_name in ['ass', 'ssa']:
-                ext = 'ass'
-                codec = 'ass'
-            elif codec_name == 'webvtt':
-                ext = 'vtt'
-                codec = 'webvtt'
-            else:  # Default to SRT
-                ext = 'srt'
-                codec = 'srt'
-            
-            subtitle_output = os.path.join(output_dir, f'subtitle_{idx}.{ext}')
+            subtitle_output = os.path.join(output_dir, f'subtitle_{idx}.srt')
             subtitle_cmd = [
                 'ffmpeg',
                 '-i', file_path,
                 '-map', f'0:{stream_idx}',
-                '-c:s', codec,
                 subtitle_output,
                 '-y',
                 '-hide_banner',
@@ -130,8 +114,6 @@ async def extract_audio_and_subtitles(file_path: str, output_dir: str) -> Tuple[
                 if result.returncode == 0 and os.path.exists(subtitle_output):
                     subtitle_files.append(subtitle_output)
                     print(f"Extracted subtitle track {idx} to {subtitle_output}")
-            except subprocess.TimeoutExpired:
-                print(f"Timeout extracting subtitle track {idx} from {file_path}")
             except Exception as e:
                 print(f"Error extracting subtitle track {idx}: {e}")
                 
@@ -142,13 +124,16 @@ async def extract_audio_and_subtitles(file_path: str, output_dir: str) -> Tuple[
 
 async def merge_tracks_into_file(source_tracks: Dict, target_file: str, output_file: str) -> bool:
     """
-    Merge extracted audio and subtitle tracks into target file without re-encoding video.
+    Merge extracted audio and subtitle tracks into target file.
     """
     try:
         # Get target file info
         target_info = get_media_info(target_file)
         if not target_info:
+            print(f"Cannot get media info for {target_file}")
             return False
+        
+        target_streams = target_info.get('streams', [])
         
         # Build ffmpeg command
         cmd = ['ffmpeg']
@@ -168,92 +153,90 @@ async def merge_tracks_into_file(source_tracks: Dict, target_file: str, output_f
             if os.path.exists(subtitle_file):
                 cmd.extend(['-i', subtitle_file])
         
-        # Map streams starting with original video
-        cmd.extend(['-map', '0:v:0'])
+        # Start mapping
+        map_cmds = []
         
-        # Map all original audio tracks (if any)
-        target_streams = target_info.get('streams', [])
+        # Map video stream (always first)
+        map_cmds.extend(['-map', '0:v'])
+        
+        # Map all original audio streams
         audio_count = sum(1 for s in target_streams if s.get('codec_type') == 'audio')
         for i in range(audio_count):
-            cmd.extend(['-map', f'0:a:{i}'])
+            map_cmds.extend(['-map', f'0:a:{i}'])
         
-        # Map all extracted audio tracks
+        # Map extracted audio streams
         for i in range(len(audio_files)):
-            cmd.extend(['-map', f'{i+1}:a:0'])
+            map_cmds.extend(['-map', f'{i+1}:a'])
         
-        # Map all original subtitle tracks (if any)
+        # Map all original subtitle streams
         subtitle_count = sum(1 for s in target_streams if s.get('codec_type') == 'subtitle')
         for i in range(subtitle_count):
-            cmd.extend(['-map', f'0:s:{i}'])
+            map_cmds.extend(['-map', f'0:s:{i}'])
         
-        # Map all extracted subtitle tracks
+        # Map extracted subtitle streams
         offset = len(audio_files) + 1
         for i in range(len(subtitle_files)):
-            cmd.extend(['-map', f'{offset + i}:s:0'])
+            map_cmds.extend(['-map', f'{offset + i}:s'])
+        
+        # Add mapping commands
+        cmd.extend(map_cmds)
         
         # Codec settings
-        # Copy video codec (no re-encoding)
+        # Copy video codec
         cmd.extend(['-c:v', 'copy'])
         
-        # Copy original audio tracks (no re-encoding)
+        # Copy original audio codecs
         for i in range(audio_count):
             cmd.extend([f'-c:a:{i}', 'copy'])
         
-        # Convert extracted audio tracks to AAC for compatibility
+        # Convert extracted audio to AAC
         for i in range(len(audio_files)):
             cmd.extend([f'-c:a:{audio_count + i}', 'aac'])
+            cmd.extend([f'-b:a:{audio_count + i}', '192k'])
         
         # Copy subtitle codecs
         cmd.extend(['-c:s', 'copy'])
         
-        # Metadata
-        cmd.extend(['-metadata', 'title=Merged File'])
+        # Set default streams
+        cmd.extend(['-disposition:a', '0'])
+        if audio_count > 0:
+            cmd.extend(['-disposition:a:0', 'default'])
         
-        # Avoid duplicate streams
+        # Metadata
+        cmd.extend(['-metadata', 'title=Merged with Sequence Bot'])
+        
+        # Avoid issues
         cmd.extend(['-max_interleave_delta', '0'])
         
-        # Output file
+        # Output
         cmd.append(output_file)
         cmd.append('-y')
-        cmd.extend(['-hide_banner', '-loglevel', 'info'])
+        cmd.extend(['-hide_banner', '-loglevel', 'warning'])
         
-        print(f"Running FFmpeg command: {' '.join(cmd)}")
+        print(f"Running merge command for {target_file}")
         
-        # Run ffmpeg with timeout
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        # Run ffmpeg
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         
         if result.returncode != 0:
-            print(f"FFmpeg error output: {result.stderr}")
+            print(f"FFmpeg error: {result.stderr}")
             return False
         
-        # Verify the output file
+        # Verify output
         if os.path.exists(output_file):
             output_info = get_media_info(output_file)
             if output_info:
-                # Check if file has audio streams
                 output_streams = output_info.get('streams', [])
-                has_audio = any(s.get('codec_type') == 'audio' for s in output_streams)
-                has_video = any(s.get('codec_type') == 'video' for s in output_streams)
-                
-                if has_video and has_audio:
-                    print(f"Successfully created merged file: {output_file}")
-                    print(f"Streams in output: {[(s.get('codec_type'), s.get('codec_name')) for s in output_streams]}")
-                    return True
-                else:
-                    print(f"Output file missing audio or video streams")
-                    return False
-            else:
-                print(f"Could not get info for output file")
-                return False
-        else:
-            print(f"Output file not created")
-            return False
+                print(f"Output streams: {[(s.get('codec_type'), s.get('codec_name')) for s in output_streams]}")
+                return True
+        
+        return False
             
     except subprocess.TimeoutExpired:
-        print(f"Timeout merging tracks for {target_file}")
+        print(f"Timeout merging {target_file}")
         return False
     except Exception as e:
-        print(f"Error merging tracks for {target_file}: {e}")
+        print(f"Error merging {target_file}: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -270,18 +253,29 @@ async def download_file(client, message, download_path: str) -> Optional[str]:
             file_name = message.audio.file_name or f"audio_{message.id}.mp3"
         
         if not file_name:
-            file_name = f"file_{message.id}.bin"
+            file_name = f"file_{message.id}.mkv"
         
         # Clean filename
-        file_name = "".join(c for c in file_name if c.isalnum() or c in (' ', '.', '-', '_')).rstrip()
+        import string
+        valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
+        file_name = ''.join(c for c in file_name if c in valid_chars)
+        
         full_path = os.path.join(download_path, file_name)
         
         # Download the file
         await client.download_media(message, file_name=full_path)
         
-        return full_path
+        # Check if file was downloaded
+        if os.path.exists(full_path) and os.path.getsize(full_path) > 0:
+            return full_path
+        else:
+            print(f"Downloaded file is empty or doesn't exist: {full_path}")
+            return None
+            
     except Exception as e:
         print(f"Error downloading file: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 async def process_merging_files(client, user_id: int, chat_id: int):
@@ -295,6 +289,7 @@ async def process_merging_files(client, user_id: int, chat_id: int):
     extracted_tracks_data = state.get("extracted_tracks", {})
     
     if not source_files or not target_files:
+        await client.send_message(chat_id, "<blockquote>❌ No files to process.</blockquote>")
         return
     
     # Create temp directory for processing
@@ -332,21 +327,25 @@ async def process_merging_files(client, user_id: int, chat_id: int):
                     )
                     
                     if target_path and os.path.exists(target_path):
-                        # Create output file name (keep original name)
+                        # Create output file name
                         original_name = os.path.basename(target_path)
                         name_without_ext = os.path.splitext(original_name)[0]
                         output_name = f"{name_without_ext}_merged.mp4"
                         output_path = os.path.join(temp_dir, output_name)
                         
-                        # Check target file first
-                        print(f"Processing file {idx}: {original_name}")
-                        print(f"Source tracks available: Audio={len(source_tracks.get('audio', []))}, Subtitles={len(source_tracks.get('subtitles', []))}")
+                        print(f"\n{'='*50}")
+                        print(f"Processing file {idx}/{len(target_files)}: {original_name}")
+                        print(f"Matching Season {target_season}, Episode {target_episode}")
+                        print(f"Source audio tracks: {len(source_tracks.get('audio', []))}")
+                        print(f"Source subtitle tracks: {len(source_tracks.get('subtitles', []))}")
                         
                         # Get target file info
                         target_media_info = get_media_info(target_path)
                         if target_media_info:
                             target_streams = target_media_info.get('streams', [])
-                            print(f"Target file streams: {[(s.get('codec_type'), s.get('codec_name')) for s in target_streams]}")
+                            audio_count = sum(1 for s in target_streams if s.get('codec_type') == 'audio')
+                            sub_count = sum(1 for s in target_streams if s.get('codec_type') == 'subtitle')
+                            print(f"Target has {audio_count} audio and {sub_count} subtitle tracks")
                         
                         # Merge tracks
                         success = await merge_tracks_into_file(
@@ -356,23 +355,27 @@ async def process_merging_files(client, user_id: int, chat_id: int):
                         )
                         
                         if success and os.path.exists(output_path):
+                            # Verify output
+                            output_info = get_media_info(output_path)
+                            if output_info:
+                                output_streams = output_info.get('streams', [])
+                                output_audio = sum(1 for s in output_streams if s.get('codec_type') == 'audio')
+                                output_subs = sum(1 for s in output_streams if s.get('codec_type') == 'subtitle')
+                                print(f"Output has {output_audio} audio and {output_subs} subtitle tracks")
+                            
                             # Send merged file back to user
                             await client.send_document(
                                 chat_id,
                                 document=output_path,
-                                caption=f"✅ Merged: {original_name}\n\nAdded {len(source_tracks.get('audio', []))} audio track(s) and {len(source_tracks.get('subtitles', []))} subtitle track(s)"
+                                caption=f"✅ Merged: {original_name}\nAdded {len(source_tracks.get('audio', []))} audio track(s) and {len(source_tracks.get('subtitles', []))} subtitle track(s)"
                             )
                             processed_count += 1
                         else:
                             failed_count += 1
-                            
-                            # Send original file if merging failed
-                            if os.path.exists(target_path):
-                                await client.send_document(
-                                    chat_id,
-                                    document=target_path,
-                                    caption=f"⚠️ Original (merge failed): {original_name}"
-                                )
+                            await client.send_message(
+                                chat_id,
+                                f"<blockquote>❌ Failed to merge file {idx}: {original_name}</blockquote>"
+                            )
                     else:
                         failed_count += 1
                         await client.send_message(
@@ -394,8 +397,8 @@ async def process_merging_files(client, user_id: int, chat_id: int):
                     f"✅ Success: {processed_count} | ❌ Failed: {failed_count}</blockquote>"
                 )
                 
-                # Small delay to avoid flooding
-                await asyncio.sleep(3)
+                # Delay to avoid flooding
+                await asyncio.sleep(2)
                 
             except Exception as e:
                 print(f"Error processing file {idx}: {e}")
