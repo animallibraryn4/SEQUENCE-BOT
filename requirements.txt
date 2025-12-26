@@ -1,10 +1,7 @@
 
-
-# [file name]: requirements.txt (updated)
-[file content begin]
 pyrofork
 tgcrypto
 pymongo
 Flask==2.3.3
 ffmpeg-python  # Add this for merging functionality
-[file content end]
+
