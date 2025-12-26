@@ -874,6 +874,11 @@ async def sequence_control_callback(client, query):
         await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
 # ----------------------- MAIN ENTRY POINT -----------------------
+
+# ==================== MERGING FEATURE ====================
+from merging import setup_merging_handlers
+
+# Then in the main() function, add this line:
 def main():
     """Initialize and run the bot"""
     # Set bot start time
@@ -882,8 +887,9 @@ def main():
     # Setup start handlers
     setup_start_handlers(app)
     
+    # Setup merging handlers
+    setup_merging_handlers(app)  # <-- ADD THIS LINE
+    
     # Run the bot
     app.run()
 
-if __name__ == "__main__":
-    main()
