@@ -1,5 +1,4 @@
-# [file name]: merging.py
-[file content begin]
+
 import os
 import re
 import asyncio
