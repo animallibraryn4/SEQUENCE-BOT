@@ -1,5 +1,4 @@
-# [file name]: bot.py
-[file content begin]
+
 import asyncio
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN
@@ -37,4 +36,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-#[file content end]
+
