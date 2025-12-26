@@ -5,17 +5,10 @@ import asyncio
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 import subprocess
-from datetime import datetime
-
-# Database imports
-from database import users_collection, update_user_stats
 
 # Temporary storage for user states
 user_merging_state = {}  # {user_id: {"step": 1/2/3, "source_files": [], "target_files": [], "current_mode": "file"/"caption"}}
-extracted_tracks = {}    # {user_id: {"season": {"episode": {"audio": [], "subtitles": []}}}}
 
 # Parse file info (reusing from sequence.py)
 def parse_file_info(text: str) -> Dict:
@@ -52,44 +45,44 @@ async def extract_audio_and_subtitles(file_path: str, output_dir: str) -> Tuple[
             '-v', 'quiet',
             '-print_format', 'json',
             '-show_streams',
-            '-show_format',
             file_path
         ]
         
         result = subprocess.run(probe_cmd, capture_output=True, text=True)
         
-        # For now, we'll use a simpler approach
-        # Extract audio tracks
+        # Extract all audio tracks
         audio_extract_cmd = [
             'ffmpeg',
             '-i', file_path,
-            '-map', '0:a:0',  # First audio track
+            '-map', '0:a',  # All audio tracks
             '-c', 'copy',
             os.path.join(output_dir, 'audio.mka'),
             '-y'
         ]
         
         try:
-            subprocess.run(audio_extract_cmd, capture_output=True, check=True)
-            audio_files.append(os.path.join(output_dir, 'audio.mka'))
-        except subprocess.CalledProcessError:
-            pass  # No audio track
+            subprocess.run(audio_extract_cmd, capture_output=True, check=False)
+            if os.path.exists(os.path.join(output_dir, 'audio.mka')):
+                audio_files.append(os.path.join(output_dir, 'audio.mka'))
+        except Exception as e:
+            print(f"No audio tracks found: {e}")
         
-        # Extract subtitles
+        # Extract all subtitle tracks
         subtitle_extract_cmd = [
             'ffmpeg',
             '-i', file_path,
-            '-map', '0:s:0',  # First subtitle track
+            '-map', '0:s',  # All subtitle tracks
             '-c', 'copy',
             os.path.join(output_dir, 'subtitles.ass'),
             '-y'
         ]
         
         try:
-            subprocess.run(subtitle_extract_cmd, capture_output=True, check=True)
-            subtitle_files.append(os.path.join(output_dir, 'subtitles.ass'))
-        except subprocess.CalledProcessError:
-            pass  # No subtitle track
+            subprocess.run(subtitle_extract_cmd, capture_output=True, check=False)
+            if os.path.exists(os.path.join(output_dir, 'subtitles.ass')):
+                subtitle_files.append(os.path.join(output_dir, 'subtitles.ass'))
+        except Exception as e:
+            print(f"No subtitle tracks found: {e}")
             
     except Exception as e:
         print(f"Error extracting tracks: {e}")
@@ -107,29 +100,32 @@ async def merge_tracks_into_file(source_tracks: Dict, target_file: str, output_f
         # Add audio tracks if available
         audio_files = source_tracks.get('audio', [])
         for audio_file in audio_files:
-            cmd.extend(['-i', audio_file])
+            if os.path.exists(audio_file):
+                cmd.extend(['-i', audio_file])
         
         # Add subtitle tracks if available
         subtitle_files = source_tracks.get('subtitles', [])
         for subtitle_file in subtitle_files:
-            cmd.extend(['-i', subtitle_file])
+            if os.path.exists(subtitle_file):
+                cmd.extend(['-i', subtitle_file])
         
         # Map streams
         cmd.extend(['-map', '0:v'])  # Keep original video
         
         # Map original audio tracks
-        cmd.extend(['-map', '0:a'])
+        cmd.extend(['-map', '0:a?'])  # Optional original audio
         
         # Map extracted audio tracks
         for i in range(len(audio_files)):
-            cmd.extend(['-map', f'{i+1}:a'])
+            cmd.extend(['-map', f'{i+1}:a?'])
         
         # Map original subtitle tracks
         cmd.extend(['-map', '0:s?'])  # Optional original subtitles
         
         # Map extracted subtitle tracks
-        for i in range(len(audio_files), len(audio_files) + len(subtitle_files)):
-            cmd.extend(['-map', f'{i+1}:s'])
+        offset = len(audio_files) + 1
+        for i in range(len(subtitle_files)):
+            cmd.extend(['-map', f'{offset + i}:s?'])
         
         # Copy all codecs (no re-encoding)
         cmd.extend(['-c', 'copy'])
@@ -139,19 +135,18 @@ async def merge_tracks_into_file(source_tracks: Dict, target_file: str, output_f
         cmd.append('-y')
         
         # Run ffmpeg
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         
-        if result.returncode == 0:
-            return True
-        else:
-            print(f"FFmpeg error: {result.stderr}")
-            return False
+        return result.returncode == 0
             
+    except subprocess.TimeoutExpired:
+        print(f"FFmpeg timeout for {target_file}")
+        return False
     except Exception as e:
-        print(f"Error merging tracks: {e}")
+        print(f"Error merging tracks for {target_file}: {e}")
         return False
 
-async def download_file(client: Client, message: Message, download_path: str) -> Optional[str]:
+async def download_file(client, message, download_path: str) -> Optional[str]:
     """Download a file from Telegram message"""
     try:
         file_name = ""
@@ -175,7 +170,7 @@ async def download_file(client: Client, message: Message, download_path: str) ->
         print(f"Error downloading file: {e}")
         return None
 
-async def process_merging_files(client: Client, user_id: int, chat_id: int):
+async def process_merging_files(client, user_id: int, chat_id: int):
     """Process merging operation for a user"""
     if user_id not in user_merging_state:
         return
@@ -222,7 +217,7 @@ async def process_merging_files(client: Client, user_id: int, chat_id: int):
                         temp_dir
                     )
                     
-                    if target_path:
+                    if target_path and os.path.exists(target_path):
                         # Create output file name
                         original_name = os.path.basename(target_path)
                         output_name = f"merged_{original_name}"
@@ -262,7 +257,7 @@ async def process_merging_files(client: Client, user_id: int, chat_id: int):
                         temp_dir
                     )
                     
-                    if target_path:
+                    if target_path and os.path.exists(target_path):
                         await client.send_document(
                             chat_id,
                             document=target_path,
@@ -270,13 +265,13 @@ async def process_merging_files(client: Client, user_id: int, chat_id: int):
                         )
                     failed_count += 1
                 
-                # Update status
-                if (processed_count + failed_count) % 2 == 0:  # Update every 2 files
-                    await status_msg.edit_text(
-                        f"<blockquote>🔄 Processing {len(target_files)} files...\n"
-                        f"Progress: {processed_count + failed_count}/{len(target_files)}\n"
-                        f"✅ Success: {processed_count} | ❌ Failed: {failed_count}</blockquote>"
-                    )
+                # Update status every file
+                current = processed_count + failed_count
+                await status_msg.edit_text(
+                    f"<blockquote>🔄 Processing {len(target_files)} files...\n"
+                    f"Progress: {current}/{len(target_files)}\n"
+                    f"✅ Success: {processed_count} | ❌ Failed: {failed_count}</blockquote>"
+                )
                 
                 # Small delay to avoid flooding
                 await asyncio.sleep(1)
@@ -299,7 +294,7 @@ async def process_merging_files(client: Client, user_id: int, chat_id: int):
             del user_merging_state[user_id]
 
 # Command handler
-async def merging_command(client: Client, message: Message):
+async def merging_command(client, message):
     """Handle /merging command"""
     user_id = message.from_user.id
     
@@ -312,6 +307,8 @@ async def merging_command(client: Client, message: Message):
         "temp_dir": None
     }
     
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    
     await message.reply_text(
         "<blockquote><b>🔀 MERGING MODE ACTIVATED</b></blockquote>\n\n"
         "<blockquote>Please send the <b>SOURCE FILES</b> from which you want to extract audio and subtitles.\n\n"
@@ -323,7 +320,7 @@ async def merging_command(client: Client, message: Message):
     )
 
 # File handler for merging
-async def handle_merging_files(client: Client, message: Message):
+async def handle_merging_files(client, message):
     """Handle files sent during merging mode"""
     user_id = message.from_user.id
     
@@ -374,139 +371,3 @@ async def handle_merging_files(client: Client, message: Message):
             f"<blockquote>✅ Target file #{count} received.\n"
             f"Season {file_info['season']}, Episode {file_info['episode']}</blockquote>"
         )
-
-# Callback handlers
-async def merging_callback_handler(client: Client, query, data: str):
-    """Handle merging callbacks"""
-    user_id = query.from_user.id
-    
-    if data.startswith("merging_done_source_"):
-        target_user_id = int(data.split("_")[3])
-        
-        if user_id != target_user_id:
-            await query.answer("This is not for you!", show_alert=True)
-            return
-        
-        if target_user_id not in user_merging_state:
-            await query.answer("Session expired!", show_alert=True)
-            return
-        
-        state = user_merging_state[target_user_id]
-        
-        if not state["source_files"]:
-            await query.answer("No source files received!", show_alert=True)
-            return
-        
-        # Move to step 2
-        state["step"] = 2
-        
-        await query.message.edit_text(
-            "<blockquote><b>✅ Source files received!</b></blockquote>\n\n"
-            "<blockquote>Now please send the <b>TARGET FILES</b> to which you want to add the extracted audio and subtitles.\n\n"
-            "The bot will match files by season and episode number.\n\n"
-            "After sending all target files, click the button below.</blockquote>",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Done with Target Files", callback_data=f"merging_done_target_{target_user_id}")],
-                [InlineKeyboardButton("❌ Cancel Merging", callback_data=f"merging_cancel_{target_user_id}")]
-            ])
-        )
-        await query.answer()
-        
-    elif data.startswith("merging_done_target_"):
-        target_user_id = int(data.split("_")[3])
-        
-        if user_id != target_user_id:
-            await query.answer("This is not for you!", show_alert=True)
-            return
-        
-        if target_user_id not in user_merging_state:
-            await query.answer("Session expired!", show_alert=True)
-            return
-        
-        state = user_merging_state[target_user_id]
-        
-        if not state["target_files"]:
-            await query.answer("No target files received!", show_alert=True)
-            return
-        
-        # Extract tracks from source files
-        await query.message.edit_text(
-            "<blockquote>⏳ Extracting audio and subtitles from source files...\n"
-            "This may take a moment.</blockquote>"
-        )
-        
-        # Process in temp directory
-        with tempfile.TemporaryDirectory() as temp_dir:
-            source_tracks_dir = os.path.join(temp_dir, "source_tracks")
-            os.makedirs(source_tracks_dir, exist_ok=True)
-            
-            extracted_data = {}
-            
-            for source_file_data in state["source_files"]:
-                try:
-                    # Download source file
-                    source_path = await download_file(
-                        client,
-                        source_file_data["message"],
-                        source_tracks_dir
-                    )
-                    
-                    if source_path:
-                        # Extract tracks
-                        file_tracks_dir = os.path.join(temp_dir, f"tracks_{os.path.basename(source_path)}")
-                        os.makedirs(file_tracks_dir, exist_ok=True)
-                        
-                        audio_files, subtitle_files = await extract_audio_and_subtitles(
-                            source_path,
-                            file_tracks_dir
-                        )
-                        
-                        # Store extracted tracks by season/episode
-                        season = source_file_data["info"]["season"]
-                        episode = source_file_data["info"]["episode"]
-                        
-                        if str(season) not in extracted_data:
-                            extracted_data[str(season)] = {}
-                        
-                        extracted_data[str(season)][str(episode)] = {
-                            "audio": audio_files,
-                            "subtitles": subtitle_files
-                        }
-                        
-                except Exception as e:
-                    print(f"Error processing source file: {e}")
-                    continue
-            
-            # Store extracted tracks
-            state["extracted_tracks"] = extracted_data
-            
-            # Start merging process
-            await query.message.edit_text(
-                "<blockquote>✅ Tracks extracted successfully!</blockquote>\n\n"
-                "<blockquote>Starting to merge tracks into target files...</blockquote>"
-            )
-            
-            # Start the merging process
-            await process_merging_files(client, target_user_id, query.message.chat.id)
-        
-    elif data.startswith("merging_cancel_"):
-        target_user_id = int(data.split("_")[2])
-        
-        if user_id != target_user_id:
-            await query.answer("This is not for you!", show_alert=True)
-            return
-        
-        # Cleanup
-        if target_user_id in user_merging_state:
-            # Clean temp directories
-            state = user_merging_state[target_user_id]
-            if state.get("temp_dir") and os.path.exists(state["temp_dir"]):
-                try:
-                    shutil.rmtree(state["temp_dir"])
-                except:
-                    pass
-            
-            del user_merging_state[target_user_id]
-        
-        await query.message.edit_text("<blockquote>❌ Merging cancelled.</blockquote>")
-        await query.answer("Merging cancelled.")
