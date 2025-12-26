@@ -1,3 +1,7 @@
+
+
+
+
 import os
 import re
 import asyncio
@@ -10,6 +14,12 @@ from typing import Dict, List, Tuple, Optional
 user_merging_state = {}  # {user_id: {"step": 1/2/3, "source_files": [], "target_files": [], "current_mode": "file"/"caption"}}
 
 # Parse file info (reusing from sequence.py)
+def setup_merging_handlers(app):
+    # This registers the command handler defined in merging.py
+    # Ensure 'merging_command' and other handlers are imported or defined here
+    app.add_handler(filters.command("merging") & merging_command)
+    # Add other necessary handlers here
+
 def parse_file_info(text: str) -> Dict:
     """Parse file information from text (either filename or caption)"""
     quality_match = re.search(r'(\d{3,4})[pP]', text)
