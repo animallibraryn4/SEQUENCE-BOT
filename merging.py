@@ -130,25 +130,30 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
     try:
         cmd = [
             "ffmpeg", "-y",
-            "-i", target_path,     # input 0 (Target Video)
-            "-i", source_path,     # input 1 (Source Audio/Subs)
+            "-i", target_path,     # Input 0: Target Video
+            "-i", source_path,     # Input 1: Source Audio/Subs
             
             "-map", "0:v:0",       # Target video
-            "-map", "0:a?",        # Target audio (Original)
-            "-map", "1:a?",        # Source audio (Added)
+            "-map", "0:a?",        # Target audio
+            "-map", "1:a?",        # Source audio
             "-map", "0:s?",        # Target subs
             "-map", "1:s?",        # Source subs
             
-            "-c:v", "copy",        # Video same rahegi (No lag)
-            "-c:a", "aac",         # Audio re-encode (Sync ke liye zaroori hai)
-            "-b:a", "192k",        # Good quality bitrate
-            "-ac", "2",            # Compatibility ke liye stereo
-            "-af", "aresample=async=1", # SYNC FIX: Audio gaps ko fill karta hai
+            "-c:v", "copy",        # Video copy (No re-encoding)
+            
+            # --- FIXED AUDIO SETTINGS FOR MX PLAYER ---
+            "-c:a", "aac",         
+            "-b:a", "128k",        # 128k is more stable for mobile hardware
+            "-ac", "2",            # Stereo
+            "-ar", "44100",        # Standard frequency for better compatibility
+            # aresample=async=1 ki jagah isse use karein:
+            "-af", "aresample=async=1:min_hard_comp=0.010000:first_pts=0",
             
             "-c:s", "copy",        # Subtitles copy
             
             "-disposition:a:0", "default",
             "-map_metadata", "0",
+            "-movflags", "+faststart", # Mobile streaming/playing optimize karta hai
             output_path
         ]
 
