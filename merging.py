@@ -130,7 +130,10 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
     try:
         cmd = [
             "ffmpeg", "-y",
+            # Dono inputs se pehle timestamps ko ignore aur fix karne ki commands
+            "-fflags", "+genpts+igndts", 
             "-i", target_path,
+            "-fflags", "+genpts+igndts",
             "-i", source_path,
             
             "-map", "0:v:0",
@@ -140,27 +143,26 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
             "-map", "1:s?",
             
             "-c:v", "copy",
-            
-            # --- THE ULTIMATE SEEK & SILENCE FIX ---
             "-c:a", "aac",
-            "-b:a", "192k",        # Thoda high bitrate better compatibility ke liye
+            "-b:a", "192k",
             "-ac", "2",
-            "-ar", "44100",        # Universal standard frequency
+            "-ar", "44100",
             
-            # Filter changes: 'async' hata kar 'aresample' ko simple rakha hai
-            # aur '-bsf:a aac_adtstoasc' add kiya hai jo seek issues fix karta hai
-            "-af", "aresample=min_hard_comp=0.010000:first_pts=0",
+            # --- THE ULTIMATE ALIGNMENT FIX ---
+            # 'aresample' ko hard-sync mode mein daal rahe hain bina 'async' filter ke
+            "-af", "aresample=min_hard_comp=0.01:min_comp=0.01:first_pts=0",
             
+            # Packets ki physical mapping fix karne ke liye
             "-max_interleave_delta", "100M",
-            "-movflags", "+faststart",
+            "-use_wallclock_as_timestamps", "0",
             "-avoid_negative_ts", "make_zero",
+            "-movflags", "+faststart",
             
-            # ADTS fix specifically for AAC in MKV/MP4 containers (Seek lag fix)
-            "-bsf:a", "aac_adtstoasc", 
+            # Audio bitstream ko sync point par fix karne ke liye
+            "-bsf:a", "aac_adtstoasc",
             
             "-map_metadata", "-1",
             "-map_chapters", "0",
-            "-ignore_unknown",
             
             "-c:s", "copy",
             "-disposition:a:0", "default",
@@ -177,7 +179,7 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
         print("Merge failed:", e)
         return False
         
-
+        
 def get_file_extension(file_path: str) -> str:
     """Get file extension from path"""
     return Path(file_path).suffix.lower()
