@@ -11,6 +11,32 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from config import OWNER_ID
 from start import is_subscribed
 
+# Check for required tools
+def check_required_tools():
+    """Check if required tools are installed"""
+    required_tools = ["ffmpeg", "ffprobe"]
+    missing_tools = []
+    
+    for tool in required_tools:
+        try:
+            subprocess.run([tool, "-version"], capture_output=True, check=False)
+            print(f"✅ {tool} is available")
+        except Exception as e:
+            missing_tools.append(tool)
+            print(f"⚠️ {tool} not available")
+    
+    # Check for mkvmerge (optional)
+    try:
+        subprocess.run(["mkvmerge", "--version"], capture_output=True, check=False)
+        print("✅ mkvmerge is available")
+        return True
+    except:
+        print("⚠️ mkvmerge not available - using FFmpeg only")
+        return False
+
+# Run the check
+MKVMERGE_AVAILABLE = check_required_tools()
+
 # Merging state management
 merging_users = {}  # Store user's merging state
 
@@ -178,104 +204,102 @@ def normalize_audio(file_path: str) -> bool:
     except:
         return False
 
-def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
+def simple_merge_fallback(source_path: str, target_path: str, output_path: str) -> bool:
+    """Simplest possible merge for maximum compatibility"""
     try:
-        # First, analyze both files to get audio delays and formats
-        source_info = get_media_info(source_path)
-        target_info = get_media_info(target_path)
-        
-        # Extract audio delay information
-        source_delay = 0
-        target_delay = 0
-        
-        for stream in source_info.get("streams", []):
-            if stream.get("codec_type") == "audio":
-                delay_tag = stream.get("tags", {}).get("delay", "0")
-                try:
-                    source_delay = int(delay_tag)
-                except:
-                    pass
-                break
-        
-        for stream in target_info.get("streams", []):
-            if stream.get("codec_type") == "audio":
-                delay_tag = stream.get("tags", {}).get("delay", "0")
-                try:
-                    target_delay = int(delay_tag)
-                except:
-                    pass
-                break
-        
-        # Calculate delay difference in seconds (convert from milliseconds if needed)
-        delay_diff = (target_delay - source_delay) / 1000000.0  # Convert to seconds
-        
-        # Build FFmpeg command with proper sync
         cmd = [
             "ffmpeg", "-y",
-            "-i", target_path,     # input 0 (Target Video)
-            "-i", source_path,     # input 1 (Source Audio/Subs)
-            
-            # Map streams properly
-            "-map", "0:v:0",       # Target video
-            "-map", "1:a?",        # Source audio first (priority)
-            "-map", "0:a?",        # Target audio (original, optional)
-            "-map", "1:s?",        # Source subtitles
-            "-map", "0:s?",        # Target subtitles
-            
-            # Video: copy without re-encoding
-            "-c:v", "copy",
-            
-            # Audio: ensure proper format and sync
-            "-c:a", "aac",         # Convert to AAC for compatibility
-            "-b:a", "192k",        # Good quality bitrate
-            "-ar", "48000",        # Standard sample rate
-            "-ac", "2",            # Stereo for compatibility
-            
-            # CRITICAL: Audio sync fixes
-            "-async", "1",         # Force audio resync
-            "-copyts",             # Copy timestamps
-            "-muxdelay", "0",      # Remove muxing delay
-            
-            # Apply delay compensation if needed
-            *(["-itsoffset", str(delay_diff), "-i", source_path, "-map", "2:a?"] if abs(delay_diff) > 0.01 else []),
-            
-            # Subtitles: copy
-            "-c:s", "copy",
-            
-            # Metadata and disposition
-            "-metadata:s:a:0", "title=Merged Audio (Source)",
-            "-disposition:a:0", "default",
-            "-metadata:s:a:1", "title=Original Audio (Target)",
-            "-disposition:a:1", "0",
-            "-map_metadata", "0",
-            
-            # Output
+            "-i", target_path,
+            "-i", source_path,
+            "-map", "0:v",      # Video from target
+            "-map", "1:a",      # Audio from source
+            "-map", "1:s?",     # Subs from source
+            "-c", "copy",       # Copy all codecs
             output_path
         ]
-
-        print(f"FFmpeg command: {' '.join(cmd[:30])}...")
         
+        print("Trying simple fallback merge...")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode != 0:
-            print("FFmpeg error:", result.stderr[:500])
-            
-            # Fallback to simpler method
-            return merge_audio_subtitles_simple(source_path, target_path, output_path)
         
-        # Verify the output file
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
-            print(f"Merge successful: {output_path}")
+        if result.returncode == 0:
+            print("✅ Simple merge successful")
             return True
         else:
-            print("Output file not created or too small")
+            print("❌ Simple merge failed too")
             return False
-
-    except subprocess.TimeoutExpired:
-        print("FFmpeg timeout - using fallback method")
-        return merge_audio_subtitles_simple(source_path, target_path, output_path)
     except Exception as e:
-        print("Merge failed:", str(e))
-        return merge_audio_subtitles_simple(source_path, target_path, output_path)
+        print(f"❌ Fallback error: {e}")
+        return False
+
+def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
+    """Improved FFmpeg merging with better audio handling"""
+    try:
+        # First check if files exist
+        if not os.path.exists(source_path) or not os.path.exists(target_path):
+            print("Source or target file does not exist")
+            return False
+        
+        print(f"Starting FFmpeg merge: {os.path.basename(target_path)}")
+        
+        # Simple and reliable FFmpeg command
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", target_path,     # Primary input (target video)
+            "-i", source_path,     # Secondary input (source audio/subs)
+            
+            # Map all streams intelligently
+            "-map", "0:v:0",       # Video from target (first video stream)
+            "-map", "1:a",         # All audio from source
+            "-map", "1:s?",        # Optional: subtitles from source
+            "-map", "0:s?",        # Optional: subtitles from target
+            
+            # Video codec
+            "-c:v", "copy",
+            
+            # Audio codec - use AAC for best compatibility
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
+            "-ac", "2",
+            
+            # Audio sync fixes
+            "-async", "1",
+            
+            # Subtitles codec
+            "-c:s", "copy",
+            
+            output_path
+        ]
+        
+        result = subprocess.run(
+            cmd, 
+            capture_output=True, 
+            text=True, 
+            timeout=600,  # 10 minutes timeout
+            check=False
+        )
+        
+        if result.returncode != 0:
+            print(f"FFmpeg error (return code: {result.returncode}):")
+            print(result.stderr[:500])
+            
+            # Try simpler approach
+            return simple_merge_fallback(source_path, target_path, output_path)
+        
+        # Check if output file was created
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
+            print(f"✅ Merge successful: {os.path.getsize(output_path)} bytes")
+            return True
+        else:
+            print("❌ Output file not created or too small")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print("❌ FFmpeg timeout - operation took too long")
+        return False
+    except Exception as e:
+        print(f"❌ Merge error: {str(e)}")
+        return False
         
 
 def get_file_extension(file_path: str) -> str:
@@ -284,90 +308,71 @@ def get_file_extension(file_path: str) -> str:
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Improved version with better audio handling
+    Smart merging that tries multiple approaches
     """
-    try:
-        # First analyze audio streams
-        source_audio = analyze_audio_streams(source_path)
-        target_audio = analyze_audio_streams(target_path)
-        
-        if not source_audio["has_audio"]:
-            print("No audio in source file - cannot merge")
-            return False
-        
-        # MKVMERGE approach with audio normalization
-        mkvmerge_cmd = [
-            "mkvmerge",
-            "-o", output_path,
+    if MKVMERGE_AVAILABLE:
+        try:
+            # MKVMERGE approach (best when available)
+            mkvmerge_cmd = [
+                "mkvmerge",
+                "-o", output_path,
+                target_path,
+                "--no-video",
+                source_path
+            ]
             
-            # Target file
-            "--no-audio" if source_audio["has_audio"] else "",  # Remove target audio if we have source audio
-            target_path,
+            print(f"Running mkvmerge...")
+            result = subprocess.run(mkvmerge_cmd, capture_output=True, text=True, timeout=300)
             
-            # Source file: take only audio and subs
-            "--no-video",
-            "--audio-tracks", "0",  # Take first audio track
-            source_path
-        ]
-        
-        # Filter out empty strings
-        mkvmerge_cmd = [x for x in mkvmerge_cmd if x]
-        
-        print(f"Running mkvmerge: {' '.join(mkvmerge_cmd)}")
-        result = subprocess.run(mkvmerge_cmd, capture_output=True, text=True, timeout=300)
-
-        if result.returncode == 0 and os.path.exists(output_path):
-            print("Merge successful with mkvmerge")
-            
-            # Optional: Normalize audio levels
-            normalize_audio(output_path)
-            return True
-        else:
-            print(f"mkvmerge failed: {result.stderr[:200]}")
-            return merge_audio_subtitles_v2(source_path, target_path, output_path)
-
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        print(f"mkvmerge error: {e}")
-        return merge_audio_subtitles_v2(source_path, target_path, output_path)
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        return merge_audio_subtitles_v2(source_path, target_path, output_path)
+            if result.returncode == 0 and os.path.exists(output_path):
+                print("✅ mkvmerge successful")
+                return True
+            else:
+                print(f"mkvmerge failed: {result.stderr[:200]}")
+        except Exception as e:
+            print(f"mkvmerge error: {e}")
+    
+    # Always fall back to FFmpeg
+    print("Using FFmpeg for merging")
+    return merge_audio_subtitles_v2(source_path, target_path, output_path)
 
 # --- TELEGRAM BOT HANDLERS ---
+async def merging_command(client: Client, message: Message):
+    """Start the merging process"""
+    if not await is_subscribed(client, message):
+        return
+    
+    user_id = message.from_user.id
+    
+    # Initialize merging state
+    merging_users[user_id] = MergingState(user_id)
+    
+    help_text = (
+        "<blockquote><b>🔧 AUTO FILE MERGING MODE</b></blockquote>\n\n"
+        "<blockquote>Please send the SOURCE FILES from which you want to extract audio and subtitles.</blockquote>\n\n"
+        "<blockquote><b>📝 Instructions:</b>\n"
+        "1. Send all source files (with desired audio/subtitle tracks)\n"
+        "2. Send <code>/done</code> when finished\n"
+        "3. Send all target files (to add tracks to)\n"
+        "4. Send <code>/done</code> again\n"
+        "5. Wait for processing</blockquote>\n\n"
+        "<blockquote><b>⚠️ Requirements:</b>\n"
+        "- Files should be MKV format for best results\n"
+        "- Files should have similar naming for auto-matching\n"
+        "- Bot needs ffmpeg installed on server</blockquote>"
+    )
+    
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_merge_cmd")]
+    ])
+    
+    await message.reply_text(help_text, reply_markup=buttons)
+
 def setup_merging_handlers(app: Client):
     """Setup all merging-related handlers"""
     
-    @app.on_message(filters.command("merging"))
-    async def merging_command(client: Client, message: Message):
-        """Start the merging process"""
-        if not await is_subscribed(client, message):
-            return
-        
-        user_id = message.from_user.id
-        
-        # Initialize merging state
-        merging_users[user_id] = MergingState(user_id)
-        
-        help_text = (
-            "<blockquote><b>🔧 AUTO FILE MERGING MODE</b></blockquote>\n\n"
-            "<blockquote>Please send the SOURCE FILES from which you want to extract audio and subtitles.</blockquote>\n\n"
-            "<blockquote><b>📝 Instructions:</b>\n"
-            "1. Send all source files (with desired audio/subtitle tracks)\n"
-            "2. Send <code>/done</code> when finished\n"
-            "3. Send all target files (to add tracks to)\n"
-            "4. Send <code>/done</code> again\n"
-            "5. Wait for processing</blockquote>\n\n"
-            "<blockquote><b>⚠️ Requirements:</b>\n"
-            "- Files should be MKV format for best results\n"
-            "- Files should have similar naming for auto-matching\n"
-            "- Bot needs ffmpeg installed on server</blockquote>"
-        )
-        
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_merge_cmd")]
-        ])
-        
-        await message.reply_text(help_text, reply_markup=buttons)
+    # Register the command handler
+    app.on_message(filters.command("merging"))(merging_command)
     
     @app.on_callback_query(filters.regex(r"^cancel_merge_cmd$"))
     async def cancel_merge_callback(client, query):
@@ -732,4 +737,3 @@ def get_merging_help_text() -> str:
 - Original target file tracks are preserved
 - Only new audio/subtitle tracks are added from source
 - No re-encoding (file size optimized)</blockquote>"""
- 
