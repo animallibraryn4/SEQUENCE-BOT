@@ -26,45 +26,30 @@ class MergingState:
 
 # --- PARSING ENGINE FOR EPISODE MATCHING ---
 def parse_episode_info(filename: str) -> Dict:
-    """Parse season and episode information from filename"""
-    # Clean the filename
-    filename = filename.lower().replace('_', ' ')
-    
-    # Try different patterns - using raw strings for regex
+    name = filename.lower()
+
     patterns = [
-        r's(\d+)\s*e(\d+)',  # S01E01
-        r'season\s*(\d+)\s*episode\s*(\d+)',  # Season 1 Episode 1
-        r'(\d+)x(\d+)',  # 1x01
-        r'ep\s*(\d+)',  # EP 01
-        r'\s(\d{2,3})\s'  # Space separated numbers like " 01 "
+        r's\s*(\d+)[\s._-]*e\s*(\d+)',      # S01E01, S1_E1, S01-E01
+        r'season\s*(\d+)[\s._-]*episode\s*(\d+)',
+        r'(\d+)[xX](\d+)',                  # 1x01
+        r'ep\s*(\d+)',                      # EP01
     ]
-    
-    season = 1  # Default season
+
+    season = 1
     episode = 0
-    
-    for pattern in patterns:
-        match = re.search(pattern, filename)
-        if match:
-            if pattern == r's(\d+)\s*e(\d+)':
-                season = int(match.group(1))
-                episode = int(match.group(2))
-                break
-            elif pattern == r'season\s*(\d+)\s*episode\s*(\d+)':
-                season = int(match.group(1))
-                episode = int(match.group(2))
-                break
-            elif pattern == r'(\d+)x(\d+)':
-                season = int(match.group(1))
-                episode = int(match.group(2))
-                break
-            elif pattern == r'ep\s*(\d+)':
-                episode = int(match.group(1))
-                break
-            elif pattern == r'\s(\d{2,3})\s':
-                episode = int(match.group(1))
-                break
-    
+
+    for p in patterns:
+        m = re.search(p, name)
+        if m:
+            if len(m.groups()) == 2:
+                season = int(m.group(1))
+                episode = int(m.group(2))
+            else:
+                episode = int(m.group(1))
+            break
+
     return {"season": season, "episode": episode}
+    
 
 def match_files_by_episode(source_files: List[Dict], target_files: List[Dict]) -> List[Tuple[Dict, Dict]]:
     """Match source and target files by season and episode"""
