@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import List, Dict, Tuple
 from pyrogram import Client, filters
+from pyrogram.handlers import MessageHandler
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from config import OWNER_ID
 from start import is_subscribed
@@ -46,11 +47,12 @@ def parse_episode_info(filename: str) -> Dict:
         if nums: episode = int(nums[-1])
     return {"season": season, "episode": episode}
 
-# --- ADVANCED MERGING ENGINE (The Fix) ---
+# --- ADVANCED MERGING ENGINE (Lag & Silence Fix) ---
 def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
     temp_audio = f"sync_temp_{os.getpid()}.m4a"
     try:
-        # STEP 1: PRE-CODE AUDIO (Silence & Lag Fix)
+        # STEP 1: PRE-CODE AUDIO (Standardize for MX Player/VLC)
+        # Isse audio frames align ho jate hain aur silent gaps khatam ho jate hain
         clean_cmd = [
             "ffmpeg", "-y", "-i", source_path,
             "-vn", "-sn", "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
@@ -59,7 +61,7 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
         ]
         subprocess.run(clean_cmd, capture_output=True, check=True)
 
-        # STEP 2: STABLE MERGE
+        # STEP 2: STABLE MERGE (No Re-encoding for Video)
         cmd = [
             "ffmpeg", "-y", "-i", target_path, "-i", temp_audio,
             "-map", "0:v:0", "-map", "0:a?", "-map", "1:a", "-map", "0:s?",
@@ -111,13 +113,16 @@ async def handle_merging_process(client: Client, message: Message, user_id: int)
     state = merging_users[user_id]
     progress = await message.reply_text("🔄 Matching episodes...")
     try:
-        source_map = {(parse_episode_info(m.document.file_name if m.document else m.video.file_name)['season'], 
-                       parse_episode_info(m.document.file_name if m.document else m.video.file_name)['episode']): m 
-                      for m in state.source_files}
+        source_map = {}
+        for m in state.source_files:
+            fname = m.document.file_name if m.document else m.video.file_name
+            info = parse_episode_info(fname)
+            source_map[(info['season'], info['episode'])] = m
         
         matches = []
         for tgt in state.target_files:
-            info = parse_episode_info(tgt.document.file_name if tgt.document else tgt.video.file_name)
+            fname = tgt.document.file_name if tgt.document else tgt.video.file_name
+            info = parse_episode_info(fname)
             key = (info['season'], info['episode'])
             if key in source_map: matches.append((source_map[key], tgt))
 
@@ -128,25 +133,29 @@ async def handle_merging_process(client: Client, message: Message, user_id: int)
             with tempfile.TemporaryDirectory() as tmp:
                 s_p = await src_msg.download(os.path.join(tmp, "s"))
                 t_p = await tgt_msg.download(os.path.join(tmp, "t"))
-                out_name = (tgt_msg.document.file_name if tgt_msg.document else tgt_msg.video.file_name).rsplit('.', 1)[0] + ".mkv"
+                
+                orig_name = tgt_msg.document.file_name if tgt_msg.document else tgt_msg.video.file_name
+                out_name = os.path.splitext(orig_name)[0] + ".mkv"
                 out_p = os.path.join(tmp, out_name)
                 
                 if merge_audio_subtitles_v2(s_p, t_p, out_p):
                     await client.send_document(user_id, out_p, caption=f"✅ {out_name}")
                 else:
                     await client.send_message(user_id, f"❌ Failed: {out_name}")
-        await progress.edit_text("✨ Done!")
+        await progress.edit_text("✨ Merging Process Completed!")
     except Exception as e:
         await progress.edit_text(f"❌ Error: {e}")
     finally:
         if user_id in merging_users: del merging_users[user_id]
 
-# --- IMPORTANT: THIS CONNECTS TO BOT.PY ---
+# --- FIX: Pyrogram Handler Setup ---
 def setup_merging_handlers(app: Client):
-    app.add_handler(filters.command("merging") & filters.private, start_merging)
-    app.add_handler(filters.command("done") & filters.private, done_command)
-    app.add_handler((filters.document | filters.video) & filters.private, handle_files, group=1)
+    # Command Handlers
+    app.add_handler(MessageHandler(start_merging, filters.command("merging") & filters.private))
+    app.add_handler(MessageHandler(done_command, filters.command("done") & filters.private))
+    # File Handler with Group 1 to avoid conflicts
+    app.add_handler(MessageHandler(handle_files, (filters.document | filters.video) & filters.private), group=1)
 
 def get_merging_help_text():
-    return "Use /merging to start. Send source files, then /done, then target files, then /done."
-    
+    return "/merging - Start process. Send source files -> /done -> target files -> /done."
+
