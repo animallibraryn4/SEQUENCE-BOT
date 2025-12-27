@@ -75,33 +75,39 @@ def match_by_episode(src, tgt):
 # ===============================
 # 🔥 MX PLAYER SAFE MERGE
 # ===============================
-
-def merge_audio_subs_safe(source, target, output) -> bool:
+def merge_audio_subs_seek_safe(source, target, output) -> bool:
     try:
         cmd = [
             "ffmpeg", "-y",
 
+            # inputs
+            "-fflags", "+genpts",
             "-i", target,
             "-i", source,
 
+            # mapping
             "-map", "0:v:0",
             "-map", "0:a?",
             "-map", "1:a?",
             "-map", "0:s?",
             "-map", "1:s?",
 
+            # 🔥 VIDEO — REMUX (no re-encode)
             "-c:v", "copy",
+            "-copyts", "0",
+            "-vsync", "vfr",
 
-            # 🔥 AUDIO FIX
+            # 🔥 AUDIO — SEEK SAFE
             "-c:a", "aac",
             "-b:a", "192k",
             "-ac", "2",
             "-ar", "48000",
             "-af", "aresample=async=1:first_pts=0",
-            "-fflags", "+genpts",
-            "-avoid_negative_ts", "make_zero",
 
+            # subs
             "-c:s", "copy",
+
+            # metadata
             "-map_metadata", "0",
             "-movflags", "+faststart",
 
@@ -110,7 +116,7 @@ def merge_audio_subs_safe(source, target, output) -> bool:
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            print(result.stderr[:400])
+            print(result.stderr[:600])
             return False
 
         return True
