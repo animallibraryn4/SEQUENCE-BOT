@@ -611,7 +611,7 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                         continue
                     
                     # Output file path - keep original target filename
-                    output_filename = f"merged_{target_data['filename']}"
+                    output_filename = target_data["filename"]
                     output_file = str(temp_path / output_filename)
                     
                     print(f"Processing pair {idx}:")
