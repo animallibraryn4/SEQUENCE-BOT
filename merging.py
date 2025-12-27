@@ -131,31 +131,34 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
         cmd = [
             "ffmpeg", "-y",
 
-            # inputs
             "-i", target_path,   # 0 = target
             "-i", source_path,   # 1 = source
 
-            # video (only from target)
+            # video from target
             "-map", "0:v",
 
             # audio (target + source)
             "-map", "0:a?",
             "-map", "1:a?",
 
-            # subtitles (IMPORTANT: both)
+            # subtitles (target + source)
             "-map", "0:s?",
             "-map", "1:s?",
 
-            # no re-encode
-            "-c", "copy",
+            # codecs
+            "-c:v", "copy",          # video safe
+            "-c:a", "aac",           # 🔥 FIX: re-encode audio
+            "-b:a", "192k",
+            "-c:s", "copy",
 
-            # default audio = target first audio
+            # sync fixes
+            "-avoid_negative_ts", "make_zero",
+            "-fflags", "+genpts",
+
+            # default audio
             "-disposition:a:0", "default",
-
-            # subtitles selectable, none forced
             "-disposition:s", "0",
 
-            # keep metadata
             "-map_metadata", "0",
 
             output_path
@@ -172,7 +175,8 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
     except Exception as e:
         print("Merge failed:", e)
         return False
-        
+
+    
         # Extract stream information
         source_streams = extract_streams_info(source_info)
         target_streams = extract_streams_info(target_info)
