@@ -889,9 +889,18 @@ def main():
     # Setup start handlers
     setup_start_handlers(app)
     
+    # Setup injection handlers if available
+    if INJECTION_AVAILABLE:
+        try:
+            setup_injection_handlers(app)
+            print("Injection handlers registered successfully.")
+        except Exception as e:
+            print(f"Failed to setup injection handlers: {e}")
+    
     # Run the bot
     app.run()
-
+    
 if __name__ == "__main__":
     main()
+
 
