@@ -127,31 +127,41 @@ def extract_streams_info(media_info: Dict) -> Dict:
     }
 
 def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
-    """FFmpeg Fallback: Sab streams ko map karega bina delete kiye"""
     try:
         cmd = [
             "ffmpeg", "-y",
-            "-i", target_path,     # input 0
-            "-i", source_path,     # input 1
+            "-i", target_path,     # input 0 (Target Video)
+            "-i", source_path,     # input 1 (Source Audio/Subs)
             
-            "-map", "0:v",         # Target video
-            "-map", "0:a?",        # Target audio (if exists)
-            "-map", "0:s?",        # Target subtitles (PRESERVE)
+            "-map", "0:v:0",       # Target video
+            "-map", "0:a?",        # Target audio (Original)
+            "-map", "1:a?",        # Source audio (Added)
+            "-map", "0:s?",        # Target subs
+            "-map", "1:s?",        # Source subs
             
-            "-map", "1:a?",        # Source audio (ADD)
-            "-map", "1:s?",        # Source subtitles (ADD)
+            "-c:v", "copy",        # Video same rahegi (No lag)
+            "-c:a", "aac",         # Audio re-encode (Sync ke liye zaroori hai)
+            "-b:a", "192k",        # Good quality bitrate
+            "-ac", "2",            # Compatibility ke liye stereo
+            "-af", "aresample=async=1", # SYNC FIX: Audio gaps ko fill karta hai
             
-            "-c", "copy",          # No re-encoding
-            "-map_metadata", "0",  # Keep target metadata
+            "-c:s", "copy",        # Subtitles copy
+            
+            "-disposition:a:0", "default",
+            "-map_metadata", "0",
             output_path
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
-        return result.returncode == 0
+        if result.returncode != 0:
+            print("FFmpeg error:", result.stderr[:500])
+            return False
+        return True
 
     except Exception as e:
-        print("FFmpeg merge failed:", e)
+        print("Merge failed:", e)
         return False
+        
 
 def get_file_extension(file_path: str) -> str:
     """Get file extension from path"""
