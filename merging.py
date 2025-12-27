@@ -169,34 +169,29 @@ def get_file_extension(file_path: str) -> str:
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Behavior:
-    - Target Video: Kept
-    - Target Audio: Kept (Optional: drop if you want ONLY source audio)
-    - Target Subtitles: Kept (Preserved)
-    - Source Audio: Added
-    - Source Subtitles: Added
+    Sync-optimized merging:
+    Pehle FFmpeg with async filter use karega taaki audio lag na kare.
     """
+    # Try FFmpeg first for better audio sync
+    success = merge_audio_subtitles_v2(source_path, target_path, output_path)
+    
+    if success:
+        print("Merge successful with Sync-Fix FFmpeg")
+        return True
+    
+    # Fallback to mkvmerge if ffmpeg fails
     try:
-        # MKVMERGE logic (Best for preserving everything)
-        # Isme hum target ke video, audio aur subs sab le rahe hain
-        # Aur source se sirf audio aur subs utha rahe hain
         mkvmerge_cmd = [
-            "mkvmerge",
-            "-o", output_path,
-            
-            # Target file: Sab kuch rakho (Video, Audio, Subtitles)
+            "mkvmerge", "-o", output_path,
             target_path,
-
-            # Source file: Sirf audio aur subs uthao, video drop kar do
-            "--no-video",
-            source_path
+            "--no-video", source_path
         ]
-
         result = subprocess.run(mkvmerge_cmd, capture_output=True, text=True)
-
-        if result.returncode == 0:
-            print("Merge successful with mkvmerge")
-            return True
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Fallback failed: {e}")
+        return False
+        
         else:
             print("mkvmerge failed, falling back to FFmpeg")
             return merge_audio_subtitles_v2(source_path, target_path, output_path)
@@ -606,3 +601,31 @@ def get_merging_help_text() -> str:
 - Original target file tracks are preserved
 - Only new audio/subtitle tracks are added from source
 - No re-encoding (file size optimized)</blockquote>"""
+
+
+
+def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
+    """
+    Sync-optimized merging:
+    Pehle FFmpeg with async filter use karega taaki audio lag na kare.
+    """
+    # Try FFmpeg first for better audio sync
+    success = merge_audio_subtitles_v2(source_path, target_path, output_path)
+    
+    if success:
+        print("Merge successful with Sync-Fix FFmpeg")
+        return True
+    
+    # Fallback to mkvmerge if ffmpeg fails
+    try:
+        mkvmerge_cmd = [
+            "mkvmerge", "-o", output_path,
+            target_path,
+            "--no-video", source_path
+        ]
+        result = subprocess.run(mkvmerge_cmd, capture_output=True, text=True)
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Fallback failed: {e}")
+        return False
+        
