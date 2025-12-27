@@ -1,4 +1,3 @@
-
 import os
 import re
 import asyncio
@@ -143,18 +142,50 @@ def extract_streams_info(media_info: Dict) -> Dict:
     }
 
 def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
-    """
-    Merge audio and subtitle tracks from source to target without re-encoding
-    Improved version with better stream handling
-    """
     try:
-        # Get media information
-        source_info = get_media_info(source_path)
-        target_info = get_media_info(target_path)
-        
-        if not source_info or not target_info:
-            print("Failed to get media info")
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", target_path,     # input 0 (video base)
+            "-i", source_path,     # input 1 (audio + subs)
+            
+            # map video from target
+            "-map", "0:v",
+            
+            # map all target audio
+            "-map", "0:a?",
+            
+            # map all source audio
+            "-map", "1:a?",
+            
+            # map subtitles from source
+            "-map", "1:s?",
+            
+            # copy everything
+            "-c", "copy",
+            
+            # set default audio = first target audio
+            "-disposition:a:0", "default",
+            
+            # ensure subs are selectable
+            "-disposition:s", "0",
+            
+            # fix metadata
+            "-map_metadata", "0",
+            
+            output_path
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print("FFmpeg error:", result.stderr[:500])
             return False
+
+        return True
+
+    except Exception as e:
+        print("Merge failed:", e)
+        return False
         
         # Extract stream information
         source_streams = extract_streams_info(source_info)
