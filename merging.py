@@ -139,21 +139,21 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
             "-map", "0:s?",
             "-map", "1:s?",
             
-            "-c:v", "copy",
-            
-            # --- STRICT SYNC & COMPATIBILITY SETTINGS ---
-            "-c:a", "aac",
+            "-c:v", "copy",        # Video copy
+            "-c:a", "aac",         # Audio encode to AAC (Highly compatible)
             "-b:a", "128k",
             "-ac", "2",
-            "-ar", "48000",        # 48kHz mobile hardware ke liye best hai
+            "-ar", "48000",
             
-            # Audio aur Video ko barabar sync karne ke liye filters
+            # --- LAG AND SYNC FIX COMMANDS ---
             "-af", "aresample=async=1:min_hard_comp=0.010000:first_pts=0",
-            
-            # Metadata aur Buffer fix (Lag rokne ke liye)
-            "-max_interleave_delta", "100M", 
+            "-max_interleave_delta", "100M",
             "-movflags", "+faststart",
-            "-avoid_negative_ts", "make_zero", # Timestamps ko reset karta hai
+            "-avoid_negative_ts", "make_zero",
+            "-map_metadata", "-1",    # Purana metadata clear karein jo lag karta hai
+            "-map_chapters", "0",     # Chapters target file se lein
+            "-ignore_unknown",        # Unknown streams ignore karein
+            "-copyts",                # Timestamps ko preserve karein taaki jump na kare
             
             "-c:s", "copy",
             "-disposition:a:0", "default",
@@ -169,7 +169,6 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
     except Exception as e:
         print("Merge failed:", e)
         return False
-        
         
 
 def get_file_extension(file_path: str) -> str:
