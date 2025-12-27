@@ -192,9 +192,6 @@ def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path
         print(f"Fallback failed: {e}")
         return False
         
-            print("mkvmerge failed, falling back to FFmpeg")
-            return merge_audio_subtitles_v2(source_path, target_path, output_path)
-
     except FileNotFoundError:
         return merge_audio_subtitles_v2(source_path, target_path, output_path)
     except Exception as e:
