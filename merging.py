@@ -130,30 +130,33 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
     try:
         cmd = [
             "ffmpeg", "-y",
-            "-i", target_path,     # Input 0: Target Video
-            "-i", source_path,     # Input 1: Source Audio/Subs
+            "-i", target_path,
+            "-i", source_path,
             
-            "-map", "0:v:0",       # Target video
-            "-map", "0:a?",        # Target audio
-            "-map", "1:a?",        # Source audio
-            "-map", "0:s?",        # Target subs
-            "-map", "1:s?",        # Source subs
+            "-map", "0:v:0",
+            "-map", "0:a?",
+            "-map", "1:a?",
+            "-map", "0:s?",
+            "-map", "1:s?",
             
-            "-c:v", "copy",        # Video copy (No re-encoding)
+            "-c:v", "copy",
             
-            # --- FIXED AUDIO SETTINGS FOR MX PLAYER ---
-            "-c:a", "aac",         
-            "-b:a", "128k",        # 128k is more stable for mobile hardware
-            "-ac", "2",            # Stereo
-            "-ar", "44100",        # Standard frequency for better compatibility
-            # aresample=async=1 ki jagah isse use karein:
+            # --- STRICT SYNC & COMPATIBILITY SETTINGS ---
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-ac", "2",
+            "-ar", "48000",        # 48kHz mobile hardware ke liye best hai
+            
+            # Audio aur Video ko barabar sync karne ke liye filters
             "-af", "aresample=async=1:min_hard_comp=0.010000:first_pts=0",
             
-            "-c:s", "copy",        # Subtitles copy
+            # Metadata aur Buffer fix (Lag rokne ke liye)
+            "-max_interleave_delta", "100M", 
+            "-movflags", "+faststart",
+            "-avoid_negative_ts", "make_zero", # Timestamps ko reset karta hai
             
+            "-c:s", "copy",
             "-disposition:a:0", "default",
-            "-map_metadata", "0",
-            "-movflags", "+faststart", # Mobile streaming/playing optimize karta hai
             output_path
         ]
 
@@ -166,6 +169,7 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
     except Exception as e:
         print("Merge failed:", e)
         return False
+        
         
 
 def get_file_extension(file_path: str) -> str:
