@@ -427,7 +427,4 @@ def setup_start_handlers(app):
             await query.message.edit_text("<blockquote>❌ Broadcast cancelled.</blockquote>")
 
 
-# ---------------- MY ALL COMMANDS ----------------
-elif data == "all_cmds":
-    # Update COMMAND_TXT to include /ls and /sf and /inject
-    updated_command_txt = COMMAND_TXT + "\n<blockquote>• /inject - Create seek-safe version of video (fixes MX Player seeking)</blockquote>"
+
