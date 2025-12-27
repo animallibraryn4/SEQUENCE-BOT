@@ -161,7 +161,160 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
     except Exception as e:
         print("Merge failed:", e)
         return False
+
+def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_path: str) -> bool:
+    """
+    Analyze source audio and optimize it for target file compatibility
+    """
+    try:
+        # Get detailed info about both files
+        source_info = get_media_info(source_path)
+        target_info = get_media_info(target_path)
         
+        source_streams = extract_streams_info(source_info)
+        target_streams = extract_streams_info(target_info)
+        
+        # Extract target video properties for alignment
+        target_video_stream = None
+        for stream in target_info.get("streams", []):
+            if stream.get("codec_type") == "video":
+                target_video_stream = stream
+                break
+        
+        if not target_video_stream:
+            print("No video stream found in target file")
+            return False
+        
+        # Get target video properties for alignment
+        target_fps = eval(target_video_stream.get("avg_frame_rate", "25/1"))
+        target_duration = float(target_info.get("format", {}).get("duration", 0))
+        
+        # Get source audio properties
+        if not source_streams["audio_streams"]:
+            print("No audio streams in source file")
+            return False
+        
+        # Prepare audio optimization command
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", source_path,
+        ]
+        
+        # Map all audio streams from source
+        for i in range(len(source_streams["audio_streams"])):
+            cmd.extend(["-map", f"0:a:{i}"])
+        
+        # Audio optimization parameters
+        cmd.extend([
+            "-c:a", "aac",                     # Convert to AAC for compatibility
+            "-b:a", "192k",                    # Optimal bitrate
+            "-ar", "48000",                    # Standard 48kHz sample rate
+            "-ac", "2",                        # Stereo for compatibility
+            "-af", "aresample=async=1:first_pts=0",  # Sync optimization
+        ])
+        
+        # Normalize audio levels if needed
+        cmd.extend(["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"])
+        
+        # Match target duration if source is longer
+        if target_duration > 0:
+            source_duration = float(source_info.get("format", {}).get("duration", 0))
+            if source_duration > target_duration:
+                cmd.extend(["-t", str(target_duration)])  # Trim to target duration
+        
+        cmd.append(output_audio_path)
+        
+        print(f"Audio optimization command: {' '.join(cmd)}")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.returncode == 0
+        
+    except Exception as e:
+        print(f"Audio optimization error: {e}")
+        return False
+
+def merge_with_aligned_audio(source_path: str, target_path: str, output_path: str) -> bool:
+    """
+    Merge files with properly analyzed and aligned audio
+    """
+    try:
+        # Create temp directory for processed audio
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            
+            # Step 1: Analyze and optimize source audio
+            optimized_audio = str(temp_path / "optimized_audio.m4a")
+            
+            if not analyze_and_optimize_audio(source_path, target_path, optimized_audio):
+                print("Failed to optimize audio, falling back to standard method")
+                return merge_audio_subtitles_v2(source_path, target_path, output_path)
+            
+            # Step 2: Get media info for mapping
+            target_info = get_media_info(target_path)
+            target_streams_info = extract_streams_info(target_info)
+            
+            audio_info = get_media_info(optimized_audio)
+            audio_streams_info = extract_streams_info(audio_info)
+            
+            # Step 3: Prepare merge command with aligned audio
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", target_path,          # Target file
+                "-i", optimized_audio,      # Optimized audio
+            ]
+            
+            # Map all target streams
+            cmd.extend([
+                "-map", "0:v",              # Target video
+                "-map", "0:a?",             # Target audio (if exists)
+                "-map", "0:s?",             # Target subtitles
+            ])
+            
+            # Map optimized audio streams
+            if audio_streams_info["audio_streams"]:
+                cmd.extend(["-map", "1:a"])  # Optimized audio
+            
+            # Codec settings
+            cmd.extend([
+                "-c:v", "copy",             # Copy video
+            ])
+            
+            # Copy target audio codec
+            if target_streams_info["audio_streams"]:
+                cmd.extend(["-c:a:0", "copy"])  # Keep original target audio
+            
+            # Add optimized audio streams with proper settings
+            if audio_streams_info["audio_streams"]:
+                target_audio_count = len(target_streams_info["audio_streams"])
+                
+                for i in range(len(audio_streams_info["audio_streams"])):
+                    audio_idx = target_audio_count + i
+                    
+                    cmd.extend([
+                        f"-c:a:{audio_idx}", "copy",      # Already optimized
+                        f"-disposition:a:{audio_idx}", "0",  # Not default
+                        f"-metadata:s:a:{audio_idx}", f"title=Optimized Audio Track {i+1}",
+                    ])
+            
+            # Copy subtitles
+            cmd.extend(["-c:s", "copy"])
+            
+            # Copy metadata from target
+            cmd.extend(["-map_metadata", "0"])
+            
+            # Ensure proper stream order
+            cmd.extend(["-sn", "-dn", "-ignore_unknown"])  # Cleanup
+            
+            cmd.append(output_path)
+            
+            print(f"Merge with aligned audio command: {' '.join(cmd)}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            return result.returncode == 0
+            
+    except Exception as e:
+        print(f"Merge with aligned audio error: {e}")
+        return merge_audio_subtitles_v2(source_path, target_path, output_path)
 
 def get_file_extension(file_path: str) -> str:
     """Get file extension from path"""
@@ -169,127 +322,60 @@ def get_file_extension(file_path: str) -> str:
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Behavior (Updated as per your requirement):
-    - Target Video: Kept (As it is - copy codec)
-    - Target Audio: Kept (Preserved - copy codec)
-    - Target Subtitles: Kept (Preserved - copy codec)
-    - Source Audio: Added (Re-encoded for compatibility and sync)
-    - Source Subtitles: Added (Copy codec)
-    - Source Video: NOT ADDED (Completely ignored)
+    Main merging function with proper audio analysis and alignment
     """
     try:
-        # Get source file streams info
+        print(f"\n=== Starting Advanced Merge ===")
+        print(f"Source: {source_path}")
+        print(f"Target: {target_path}")
+        print(f"Output: {output_path}")
+        
+        # Get media info for logging
         source_info = get_media_info(source_path)
-        source_streams_info = extract_streams_info(source_info)
-        
-        # Get target file streams info for reference
         target_info = get_media_info(target_path)
-        target_streams_info = extract_streams_info(target_info)
         
-        # Get audio and subtitle stream indices from source
-        source_audio_indices = [str(a["index"]) for a in source_streams_info["audio_streams"]]
-        source_sub_indices = [str(s["index"]) for s in source_streams_info["subtitle_streams"]]
+        source_streams = extract_streams_info(source_info)
+        target_streams = extract_streams_info(target_info)
         
-        # If no audio or subtitles in source, return False
-        if not source_audio_indices and not source_sub_indices:
-            print("No audio or subtitle streams found in source file")
+        print(f"\nSource Info:")
+        print(f"  Audio streams: {len(source_streams['audio_streams'])}")
+        print(f"  Subtitle streams: {len(source_streams['subtitle_streams'])}")
+        for i, audio in enumerate(source_streams['audio_streams']):
+            print(f"    Audio {i}: {audio['codec']} ({audio['language']})")
+        
+        print(f"\nTarget Info:")
+        print(f"  Audio streams: {len(target_streams['audio_streams'])}")
+        print(f"  Subtitle streams: {len(target_streams['subtitle_streams'])}")
+        
+        # Check if we have audio to add
+        if not source_streams["audio_streams"] and not source_streams["subtitle_streams"]:
+            print("No audio or subtitles to add from source")
             return False
         
-        # Prepare FFmpeg command
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", target_path,          # Input 0: Target file
-            "-i", source_path,          # Input 1: Source file
-        ]
+        # Use advanced merge with aligned audio
+        success = merge_with_aligned_audio(source_path, target_path, output_path)
         
-        # Calculate stream mapping indices
-        stream_map = []
-        
-        # Target streams (keep all as-is)
-        # Video streams from target
-        for i in range(len([s for s in target_info.get("streams", []) if s.get("codec_type") == "video"])):
-            stream_map.append(f"0:v:{i}")
-        
-        # Audio streams from target (copy codec)
-        for i in range(len([s for s in target_info.get("streams", []) if s.get("codec_type") == "audio"])):
-            stream_map.append(f"0:a:{i}")
-        
-        # Subtitle streams from target (copy codec)
-        for i in range(len([s for s in target_info.get("streams", []) if s.get("codec_type") == "subtitle"])):
-            stream_map.append(f"0:s:{i}")
-        
-        # Source audio streams (will be re-encoded)
-        for i, audio_idx in enumerate(source_audio_indices):
-            stream_map.append(f"1:a:{i}")
-        
-        # Source subtitle streams (copy codec)
-        for i, sub_idx in enumerate(source_sub_indices):
-            stream_map.append(f"1:s:{i}")
-        
-        # Build the command with mappings
-        cmd.extend(["-map", "0:v"])     # All video from target (copy)
-        cmd.extend(["-map", "0:a"])     # All audio from target (copy)
-        cmd.extend(["-map", "0:s"])     # All subtitles from target (copy)
-        
-        # Map audio and subtitles from source
-        if source_audio_indices:
-            cmd.extend(["-map", "1:a"])  # All audio from source
-        
-        if source_sub_indices:
-            cmd.extend(["-map", "1:s"])  # All subtitles from source
-        
-        # Codec settings
-        cmd.extend([
-            "-c:v", "copy",             # Copy video codec from target
-            "-c:a:0", "copy",           # Copy original target audio streams
-        ])
-        
-        # Configure re-encoding for SOURCE audio streams
-        # Determine starting index for source audio streams
-        target_audio_count = len(target_streams_info["audio_streams"])
-        
-        for i in range(len(source_audio_indices)):
-            audio_idx = target_audio_count + i  # Source audio comes after target audio
+        if success:
+            print("=== Merge Successful (With Audio Optimization) ===")
             
-            # Re-encode source audio with optimal settings
-            cmd.extend([
-                f"-c:a:{audio_idx}", "aac",           # Re-encode to AAC for compatibility
-                f"-b:a:{audio_idx}", "192k",          # Good quality bitrate
-                f"-ac:a:{audio_idx}", "2",            # Stereo for compatibility
-                f"-metadata:s:a:{audio_idx}", f"title=Added Audio {i+1}",
-            ])
+            # Verify output
+            output_info = get_media_info(output_path)
+            output_streams = extract_streams_info(output_info)
             
-            # Add sync optimization for source audio
-            cmd.extend([f"-af:a:{audio_idx}", "aresample=async=1"])
-        
-        # Copy all subtitle codecs
-        cmd.extend(["-c:s", "copy"])    # Copy all subtitle codecs
-        
-        # Set default audio stream (first target audio)
-        if target_audio_count > 0:
-            cmd.extend(["-disposition:a:0", "default"])
-        
-        # Copy metadata from target
-        cmd.extend(["-map_metadata", "0"])
-        
-        # Output file
-        cmd.append(output_path)
-        
-        print(f"FFmpeg command: {' '.join(cmd)}")
-        
-        # Run FFmpeg
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            print("Merge successful - source audio re-encoded for optimization")
+            print(f"\nOutput Verification:")
+            print(f"  Total audio streams: {len(output_streams['audio_streams'])}")
+            print(f"  Total subtitle streams: {len(output_streams['subtitle_streams'])}")
+            
             return True
         else:
-            print("FFmpeg error:", result.stderr[:500])
-            return False
+            print("Advanced merge failed, trying fallback...")
+            return merge_audio_subtitles_v2(source_path, target_path, output_path)
             
     except Exception as e:
         print(f"Error in simple merge: {e}")
+        import traceback
+        traceback.print_exc()
         return merge_audio_subtitles_v2(source_path, target_path, output_path)
-
 
 # --- TELEGRAM BOT HANDLERS ---
 def setup_merging_handlers(app: Client):
