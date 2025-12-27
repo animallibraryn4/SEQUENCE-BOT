@@ -177,98 +177,47 @@ def normalize_audio(file_path: str) -> bool:
         return False
     except:
         return False
-
+        
 def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
     try:
-        # First, analyze both files to get audio delays and formats
-        source_info = get_media_info(source_path)
-        target_info = get_media_info(target_path)
-        
-        # Extract audio delay information
-        source_delay = 0
-        target_delay = 0
-        
-        for stream in source_info.get("streams", []):
-            if stream.get("codec_type") == "audio":
-                delay_tag = stream.get("tags", {}).get("delay", "0")
-                try:
-                    source_delay = int(delay_tag)
-                except:
-                    pass
-                break
-        
-        for stream in target_info.get("streams", []):
-            if stream.get("codec_type") == "audio":
-                delay_tag = stream.get("tags", {}).get("delay", "0")
-                try:
-                    target_delay = int(delay_tag)
-                except:
-                    pass
-                break
-        
-        # Calculate delay difference in seconds (convert from milliseconds if needed)
-        delay_diff = (target_delay - source_delay) / 1000000.0  # Convert to seconds
-        
-        # Build FFmpeg command with proper sync
         cmd = [
             "ffmpeg", "-y",
-            "-i", target_path,     # input 0 (Target Video)
-            "-i", source_path,     # input 1 (Source Audio/Subs)
+            "-i", target_path,     # Input 0: Target Video
+            "-i", source_path,     # Input 1: Source Audio/Subs
             
-            # Map streams properly
             "-map", "0:v:0",       # Target video
-            "-map", "1:a?",        # Source audio first (priority)
-            "-map", "0:a?",        # Target audio (original, optional)
-            "-map", "1:s?",        # Source subtitles
-            "-map", "0:s?",        # Target subtitles
+            "-map", "0:a?",        # Target audio
+            "-map", "1:a?",        # Source audio
+            "-map", "0:s?",        # Target subs
+            "-map", "1:s?",        # Source subs
             
-            # Video: copy without re-encoding
-            "-c:v", "copy",
+            "-c:v", "copy",        # Video copy (No re-encoding)
             
-            # Audio: ensure proper format and sync
-            "-c:a", "aac",         # Convert to AAC for compatibility
-            "-b:a", "192k",        # Good quality bitrate
-            "-ar", "48000",        # Standard sample rate
-            "-ac", "2",            # Stereo for compatibility
+            # --- FIXED AUDIO SETTINGS FOR MX PLAYER ---
+            "-c:a", "aac",         
+            "-b:a", "128k",        # 128k is more stable for mobile hardware
+            "-ac", "2",            # Stereo
+            "-ar", "44100",        # Standard frequency for better compatibility
+            # aresample=async=1 ki jagah isse use karein:
+            "-af", "aresample=async=1:min_hard_comp=0.010000:first_pts=0",
             
-            # CRITICAL: Audio sync fixes
-            "-async", "1",         # Force audio resync
-            "-copyts",             # Copy timestamps
-            "-muxdelay", "0",      # Remove muxing delay
+            "-c:s", "copy",        # Subtitles copy
             
-            # Apply delay compensation if needed
-            *(["-itsoffset", str(delay_diff), "-i", source_path, "-map", "2:a?"] if abs(delay_diff) > 0.01 else []),
-            
-            # Subtitles: copy
-            "-c:s", "copy",
-            
-            # Metadata and disposition
-            "-metadata:s:a:0", "title=Merged Audio (Source)",
             "-disposition:a:0", "default",
-            "-metadata:s:a:1", "title=Original Audio (Target)",
-            "-disposition:a:1", "0",
             "-map_metadata", "0",
-            
-            # Output
+            "-movflags", "+faststart", # Mobile streaming/playing optimize karta hai
             output_path
         ]
 
-        print(f"FFmpeg command: {' '.join(cmd[:30])}...")
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print("FFmpeg error:", result.stderr[:500])
-            
-            # Fallback to simpler method
-            return merge_audio_subtitles_simple(source_path, target_path, output_path)
-        
-        # Verify the output file
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
-            print(f"Merge successful: {output_path}")
-            return True
-        else:
-            print("Output file not created or too small")
             return False
+        return True
+
+    except Exception as e:
+        print("Merge failed:", e)
+        return False
 
     except subprocess.TimeoutExpired:
         print("FFmpeg timeout - using fallback method")
