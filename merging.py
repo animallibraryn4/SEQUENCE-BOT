@@ -76,47 +76,86 @@ def match_by_episode(src, tgt):
 # 🔥 MX PLAYER SAFE MERGE
 # ===============================
 
-def merge_audio_subs_safe(source, target, output) -> bool:
+def inject_audio_subs_method_2(source, target, output) -> bool:
     try:
-        cmd = [
+        base = output.rsplit(".", 1)[0]
+        audio_file = base + "_audio.aac"
+        sub_file = base + "_sub.srt"
+
+        # -------------------------
+        # STEP 1: Extract & clean AUDIO
+        # -------------------------
+        audio_cmd = [
             "ffmpeg", "-y",
-
-            "-i", target,
             "-i", source,
-
-            "-map", "0:v:0",
-            "-map", "0:a?",
-            "-map", "1:a?",
-            "-map", "0:s?",
-            "-map", "1:s?",
-
-            "-c:v", "copy",
-
-            # 🔥 AUDIO FIX
+            "-map", "0:a:0",
             "-c:a", "aac",
-            "-b:a", "192k",
             "-ac", "2",
             "-ar", "48000",
-            "-af", "aresample=async=1:first_pts=0",
+            "-b:a", "192k",
             "-fflags", "+genpts",
             "-avoid_negative_ts", "make_zero",
+            audio_file
+        ]
 
-            "-c:s", "copy",
+        r1 = subprocess.run(audio_cmd, capture_output=True, text=True)
+        if r1.returncode != 0:
+            print("Audio extract error:", r1.stderr[:300])
+            return False
+
+        # -------------------------
+        # STEP 2: Extract SUBTITLES (convert to SRT)
+        # -------------------------
+        sub_cmd = [
+            "ffmpeg", "-y",
+            "-i", source,
+            "-map", "0:s:0",
+            "-c:s", "srt",
+            sub_file
+        ]
+
+        r2 = subprocess.run(sub_cmd, capture_output=True, text=True)
+        if r2.returncode != 0:
+            print("Subtitle extract error:", r2.stderr[:300])
+            sub_file = None  # subtitles optional
+
+        # -------------------------
+        # STEP 3: Inject into TARGET
+        # -------------------------
+        inject_cmd = [
+            "ffmpeg", "-y",
+            "-i", target,
+            "-i", audio_file,
+        ]
+
+        if sub_file:
+            inject_cmd += ["-i", sub_file]
+
+        inject_cmd += [
+            "-map", "0:v",
+            "-map", "0:a?",
+            "-map", "1:a",
+        ]
+
+        if sub_file:
+            inject_cmd += ["-map", "2:s"]
+
+        inject_cmd += [
+            "-c", "copy",
             "-map_metadata", "0",
             "-movflags", "+faststart",
-
             output
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(result.stderr[:400])
+        r3 = subprocess.run(inject_cmd, capture_output=True, text=True)
+        if r3.returncode != 0:
+            print("Inject error:", r3.stderr[:400])
             return False
 
         return True
 
     except Exception as e:
-        print("Merge error:", e)
+        print("Method 2 A+S error:", e)
         return False
 
 
@@ -203,7 +242,7 @@ async def process_merge(client, state: MergingState, message: Message):
 
             out = tmp / tgt["filename"]
 
-            if merge_audio_subs_safe(src_file, tgt_file, out):
+            if inject_audio_subs_method_2(src_file, tgt_file, out):
                 await client.send_document(
                     message.chat.id,
                     out,
