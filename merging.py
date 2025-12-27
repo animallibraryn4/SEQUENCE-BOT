@@ -164,7 +164,7 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
 
 def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_path: str) -> bool:
     """
-    Analyze source audio and optimize it for target file compatibility
+    Analyze source audio and optimize it for MX Player compatibility
     """
     try:
         # Get detailed info about both files
@@ -185,46 +185,53 @@ def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_
             print("No video stream found in target file")
             return False
         
-        # Get target video properties for alignment
-        target_fps = eval(target_video_stream.get("avg_frame_rate", "25/1"))
+        # Get target video properties for MX Player compatibility
+        target_fps = eval(target_video_stream.get("avg_frame_rate", "24000/1001"))
         target_duration = float(target_info.get("format", {}).get("duration", 0))
         
-        # Get source audio properties
-        if not source_streams["audio_streams"]:
-            print("No audio streams in source file")
-            return False
+        # Get video timebase for sync
+        if "time_base" in target_video_stream:
+            time_base = target_video_stream["time_base"]
+        else:
+            time_base = "1/1000"
         
-        # Prepare audio optimization command
+        # Prepare audio optimization command for MX Player
         cmd = [
             "ffmpeg", "-y",
             "-i", source_path,
+            "-strict", "-2",  # Allow experimental codecs if needed
         ]
         
         # Map all audio streams from source
         for i in range(len(source_streams["audio_streams"])):
             cmd.extend(["-map", f"0:a:{i}"])
         
-        # Audio optimization parameters
+        # MX Player specific audio optimization
         cmd.extend([
-            "-c:a", "aac",                     # Convert to AAC for compatibility
+            "-c:a", "aac",                     # AAC is best for MX Player
             "-b:a", "192k",                    # Optimal bitrate
-            "-ar", "48000",                    # Standard 48kHz sample rate
-            "-ac", "2",                        # Stereo for compatibility
-            "-af", "aresample=async=1:first_pts=0",  # Sync optimization
+            "-ar", "48000",                    # Must be 48kHz for MX Player
+            "-ac", "2",                        # Stereo (MX Player prefers this)
+            "-async", "1",                     # Force audio resampling for sync
+            "-af", "aresample=async=1000",     # Aggressive sync for MX Player
         ])
         
-        # Normalize audio levels if needed
-        cmd.extend(["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"])
+        # Add proper timestamp handling for MX Player
+        cmd.extend([
+            "-avoid_negative_ts", "make_zero",  # Fix negative timestamps
+            "-fflags", "+genpts",              # Generate missing PTS
+            "-max_interleave_delta", "0",      # Reduce interleaving delay
+        ])
         
-        # Match target duration if source is longer
+        # Match target duration precisely
         if target_duration > 0:
             source_duration = float(source_info.get("format", {}).get("duration", 0))
-            if source_duration > target_duration:
-                cmd.extend(["-t", str(target_duration)])  # Trim to target duration
+            if abs(source_duration - target_duration) > 0.1:  # If difference > 100ms
+                cmd.extend(["-t", str(target_duration)])
         
         cmd.append(output_audio_path)
         
-        print(f"Audio optimization command: {' '.join(cmd)}")
+        print(f"MX Player Audio optimization command: {' '.join(cmd)}")
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0
@@ -233,88 +240,146 @@ def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_
         print(f"Audio optimization error: {e}")
         return False
 
-def merge_with_aligned_audio(source_path: str, target_path: str, output_path: str) -> bool:
+def merge_for_mx_player_compatibility(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Merge files with properly analyzed and aligned audio
+    Merge files with MX Player compatibility fixes
     """
     try:
         # Create temp directory for processed audio
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             
-            # Step 1: Analyze and optimize source audio
-            optimized_audio = str(temp_path / "optimized_audio.m4a")
+            # Step 1: Optimize audio for MX Player
+            optimized_audio = str(temp_path / "mx_optimized_audio.m4a")
             
             if not analyze_and_optimize_audio(source_path, target_path, optimized_audio):
-                print("Failed to optimize audio, falling back to standard method")
-                return merge_audio_subtitles_v2(source_path, target_path, output_path)
+                print("Failed to optimize audio for MX Player")
+                return False
             
-            # Step 2: Get media info for mapping
+            # Step 2: Get media info
             target_info = get_media_info(target_path)
             target_streams_info = extract_streams_info(target_info)
             
             audio_info = get_media_info(optimized_audio)
             audio_streams_info = extract_streams_info(audio_info)
             
-            # Step 3: Prepare merge command with aligned audio
+            # Step 3: Prepare merge command with MX Player fixes
             cmd = [
                 "ffmpeg", "-y",
                 "-i", target_path,          # Target file
                 "-i", optimized_audio,      # Optimized audio
+                "-strict", "-2",            # Allow experimental codecs
             ]
             
-            # Map all target streams
+            # MX Player requires proper stream ordering
             cmd.extend([
-                "-map", "0:v",              # Target video
-                "-map", "0:a?",             # Target audio (if exists)
-                "-map", "0:s?",             # Target subtitles
+                "-map", "0:v",              # Video first (MX Player likes this)
+                "-map", "0:a?",             # Original audio
+                "-map", "1:a?",             # Optimized audio
+                "-map", "0:s?",             # Subtitles last
             ])
             
-            # Map optimized audio streams
-            if audio_streams_info["audio_streams"]:
-                cmd.extend(["-map", "1:a"])  # Optimized audio
-            
-            # Codec settings
+            # Video settings for MX Player
             cmd.extend([
                 "-c:v", "copy",             # Copy video
+                "-vsync", "cfr",            # Constant frame rate (better for MX)
+                "-copyts",                  # Copy timestamps
+                "-start_at_zero",           # Start at zero
             ])
             
-            # Copy target audio codec
-            if target_streams_info["audio_streams"]:
-                cmd.extend(["-c:a:0", "copy"])  # Keep original target audio
+            # Audio settings for MX Player
+            cmd.extend([
+                "-c:a", "copy",             # Copy all audio (already optimized)
+                "-disposition:a", "default",  # Set default audio
+                "-af", "aresample=async=1000",  # Extra sync for MX Player
+            ])
             
-            # Add optimized audio streams with proper settings
-            if audio_streams_info["audio_streams"]:
-                target_audio_count = len(target_streams_info["audio_streams"])
-                
-                for i in range(len(audio_streams_info["audio_streams"])):
-                    audio_idx = target_audio_count + i
-                    
-                    cmd.extend([
-                        f"-c:a:{audio_idx}", "copy",      # Already optimized
-                        f"-disposition:a:{audio_idx}", "0",  # Not default
-                        f"-metadata:s:a:{audio_idx}", f"title=Optimized Audio Track {i+1}",
-                    ])
+            # MX Player subtitle settings
+            cmd.extend([
+                "-c:s", "mov_text" if output_path.endswith('.mp4') else "copy",
+            ])
             
-            # Copy subtitles
-            cmd.extend(["-c:s", "copy"])
+            # MX Player container optimizations
+            cmd.extend([
+                "-movflags", "+faststart",  # Quick start for streaming
+                "-f", "mp4" if output_path.endswith('.mp4') else "matroska",
+                "-fflags", "+genpts+igndts",  # Generate PTS, ignore DTS
+                "-max_interleave_delta", "1000000",  # Reduce buffer
+            ])
             
-            # Copy metadata from target
-            cmd.extend(["-map_metadata", "0"])
-            
-            # Ensure proper stream order
-            cmd.extend(["-sn", "-dn", "-ignore_unknown"])  # Cleanup
+            # Metadata for MX Player
+            cmd.extend([
+                "-metadata", "handler_name=MX Player Compatible",
+                "-metadata:s:v", "title=Video Track",
+                "-metadata:s:a", "title=Audio Track",
+                "-write_tmcd", "0",         # Don't write timecode
+            ])
             
             cmd.append(output_path)
             
-            print(f"Merge with aligned audio command: {' '.join(cmd)}")
+            print(f"MX Player merge command: {' '.join(cmd)}")
             
             result = subprocess.run(cmd, capture_output=True, text=True)
-            return result.returncode == 0
+            
+            if result.returncode == 0:
+                print("MX Player merge successful")
+                return True
+            else:
+                print(f"MX Player merge failed: {result.stderr[:500]}")
+                return False
             
     except Exception as e:
-        print(f"Merge with aligned audio error: {e}")
-        return merge_audio_subtitles_v2(source_path, target_path, output_path)
+        print(f"MX Player merge error: {e}")
+        return False
+
+def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output_path: str) -> bool:
+    """
+    Improved v2 method with MX Player fixes
+    """
+    try:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", target_path,
+            "-i", source_path,
+            
+            # Stream mapping
+            "-map", "0:v:0",
+            "-map", "0:a?",
+            "-map", "1:a?",
+            "-map", "0:s?",
+            "-map", "1:s?",
+            
+            # MX Player video fixes
+            "-c:v", "copy",
+            "-vsync", "cfr",
+            "-copyts",
+            
+            # MX Player audio fixes
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
+            "-ac", "2",
+            "-async", "1",
+            "-af", "aresample=async=1000",
+            
+            # MX Player container fixes
+            "-c:s", "mov_text" if output_path.endswith('.mp4') else "copy",
+            "-movflags", "+faststart",
+            "-max_interleave_delta", "0",
+            
+            # Sync fixes
+            "-fflags", "+genpts",
+            "-avoid_negative_ts", "make_zero",
+            
+            output_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.returncode == 0
+        
+    except Exception as e:
+        print(f"MX fixed v2 error: {e}")
+        return False
 
 def get_file_extension(file_path: str) -> str:
     """Get file extension from path"""
@@ -322,57 +387,56 @@ def get_file_extension(file_path: str) -> str:
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Main merging function with proper audio analysis and alignment
+    Main merging function with MX Player compatibility
     """
     try:
-        print(f"\n=== Starting Advanced Merge ===")
-        print(f"Source: {source_path}")
-        print(f"Target: {target_path}")
-        print(f"Output: {output_path}")
+        print(f"\n=== Starting MX Player Compatible Merge ===")
         
-        # Get media info for logging
+        # Determine output format based on target
+        target_ext = get_file_extension(target_path)
+        if not output_path.endswith(target_ext):
+            output_path = output_path.rsplit('.', 1)[0] + target_ext
+        
+        # Get media info
         source_info = get_media_info(source_path)
         target_info = get_media_info(target_path)
         
         source_streams = extract_streams_info(source_info)
         target_streams = extract_streams_info(target_info)
         
-        print(f"\nSource Info:")
-        print(f"  Audio streams: {len(source_streams['audio_streams'])}")
-        print(f"  Subtitle streams: {len(source_streams['subtitle_streams'])}")
-        for i, audio in enumerate(source_streams['audio_streams']):
-            print(f"    Audio {i}: {audio['codec']} ({audio['language']})")
-        
-        print(f"\nTarget Info:")
-        print(f"  Audio streams: {len(target_streams['audio_streams'])}")
-        print(f"  Subtitle streams: {len(target_streams['subtitle_streams'])}")
+        print(f"Target format: {target_info.get('format', {}).get('format_name', 'unknown')}")
+        print(f"Target video codec: {[s.get('codec_name') for s in target_info.get('streams', []) if s.get('codec_type') == 'video']}")
         
         # Check if we have audio to add
         if not source_streams["audio_streams"] and not source_streams["subtitle_streams"]:
             print("No audio or subtitles to add from source")
             return False
         
-        # Use advanced merge with aligned audio
-        success = merge_with_aligned_audio(source_path, target_path, output_path)
-        
-        if success:
-            print("=== Merge Successful (With Audio Optimization) ===")
+        # Try MX Player optimized merge first
+        if merge_for_mx_player_compatibility(source_path, target_path, output_path):
+            print("=== MX Player Optimized Merge Successful ===")
             
-            # Verify output
-            output_info = get_media_info(output_path)
-            output_streams = extract_streams_info(output_info)
-            
-            print(f"\nOutput Verification:")
-            print(f"  Total audio streams: {len(output_streams['audio_streams'])}")
-            print(f"  Total subtitle streams: {len(output_streams['subtitle_streams'])}")
+            # Additional post-processing for MX Player if needed
+            if target_ext.lower() == '.mp4':
+                # Run qt-faststart for better MP4 compatibility
+                try:
+                    temp_output = output_path + ".temp"
+                    os.rename(output_path, temp_output)
+                    qt_cmd = ["qt-faststart", temp_output, output_path]
+                    subprocess.run(qt_cmd, capture_output=True)
+                    os.remove(temp_output)
+                    print("Applied qt-faststart for better streaming")
+                except:
+                    pass
             
             return True
         else:
-            print("Advanced merge failed, trying fallback...")
-            return merge_audio_subtitles_v2(source_path, target_path, output_path)
+            print("MX Player merge failed, trying standard method...")
+            # Fallback to standard method but with MX Player fixes
+            return merge_audio_subtitles_v2_mx_fixed(source_path, target_path, output_path)
             
     except Exception as e:
-        print(f"Error in simple merge: {e}")
+        print(f"Error in MX Player merge: {e}")
         import traceback
         traceback.print_exc()
         return merge_audio_subtitles_v2(source_path, target_path, output_path)
@@ -465,6 +529,7 @@ def setup_merging_handlers(app: Client):
         if state.state == "waiting_for_source":
             state.source_files.append(file_data)
             
+            # Send confirmation
             # Send confirmation
             if len(state.source_files) % 3 == 0 or len(state.source_files) == 1:
                 await message.reply_text(
