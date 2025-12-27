@@ -621,7 +621,7 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                     print(f"  Output: {output_filename}")
                     
                     # Merge audio and subtitles using improved method
-                    if merge_audio_subtitles_simple(source_file, target_file, output_file):
+                    if merge_audio_subtitles_v2(source_file, target_file, output_file):
                         # Upload merged file
                         await client.send_document(
                             chat_id=user_id,
