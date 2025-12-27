@@ -125,15 +125,11 @@ def extract_streams_info(media_info: Dict) -> Dict:
         "subtitle_streams": subtitle_streams,
         "total_streams": len(media_info.get("streams", []))
     }
-
 def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
     try:
         cmd = [
             "ffmpeg", "-y",
-            # Dono inputs se pehle timestamps ko ignore aur fix karne ki commands
-            "-fflags", "+genpts+igndts", 
             "-i", target_path,
-            "-fflags", "+genpts+igndts",
             "-i", source_path,
             
             "-map", "0:v:0",
@@ -142,27 +138,27 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
             "-map", "0:s?",
             "-map", "1:s?",
             
-            "-c:v", "copy",
+            # --- VIDEO RE-SYNC FIX ---
+            # Hum video ko 'ultrafast' encode karenge taaki naye aur sahi timestamps bane
+            "-c:v", "libx264", 
+            "-preset", "ultrafast", 
+            "-crf", "23",          # Quality maintain rahegi
+            
+            # --- AUDIO HARD SYNC ---
             "-c:a", "aac",
             "-b:a", "192k",
             "-ac", "2",
             "-ar", "44100",
             
-            # --- THE ULTIMATE ALIGNMENT FIX ---
-            # 'aresample' ko hard-sync mode mein daal rahe hain bina 'async' filter ke
-            "-af", "aresample=min_hard_comp=0.01:min_comp=0.01:first_pts=0",
+            # Ye filter audio ko video ke timestamps (PTS) ke saath lock kar dega
+            "-af", "aresample=async=1:min_hard_comp=0.01,asetpts=PTS",
             
-            # Packets ki physical mapping fix karne ke liye
-            "-max_interleave_delta", "100M",
-            "-use_wallclock_as_timestamps", "0",
+            "-max_interleave_delta", "200M",
             "-avoid_negative_ts", "make_zero",
             "-movflags", "+faststart",
             
-            # Audio bitstream ko sync point par fix karne ke liye
-            "-bsf:a", "aac_adtstoasc",
-            
-            "-map_metadata", "-1",
-            "-map_chapters", "0",
+            # Container level synchronization
+            "-fflags", "+genpts",
             
             "-c:s", "copy",
             "-disposition:a:0", "default",
