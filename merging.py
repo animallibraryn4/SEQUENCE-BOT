@@ -139,21 +139,27 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
             "-map", "0:s?",
             "-map", "1:s?",
             
-            "-c:v", "copy",        # Video copy
-            "-c:a", "aac",         # Audio encode to AAC (Highly compatible)
+            "-c:v", "copy",
+            "-c:a", "aac",
             "-b:a", "128k",
             "-ac", "2",
             "-ar", "48000",
             
-            # --- LAG AND SYNC FIX COMMANDS ---
-            "-af", "aresample=async=1:min_hard_comp=0.010000:first_pts=0",
+            # --- SILENCE & GAP FIX ---
+            # 'aresample=async=1' ki jagah 'aresample=async=1000' aur 'apad' use kar rahe hain
+            # async=1000 se chote gaps fill ho jayenge bina silent kiye
+            "-af", "aresample=async=1000:min_hard_comp=0.010000:first_pts=0,apad",
+            
             "-max_interleave_delta", "100M",
             "-movflags", "+faststart",
             "-avoid_negative_ts", "make_zero",
-            "-map_metadata", "-1",    # Purana metadata clear karein jo lag karta hai
-            "-map_chapters", "0",     # Chapters target file se lein
-            "-ignore_unknown",        # Unknown streams ignore karein
-            "-copyts",                # Timestamps ko preserve karein taaki jump na kare
+            "-map_metadata", "-1",
+            "-map_chapters", "0",
+            "-ignore_unknown",
+            "-copyts",
+            
+            # Short audio ko video ke end tak stretch karne ke liye
+            "-shortest", 
             
             "-c:s", "copy",
             "-disposition:a:0", "default",
