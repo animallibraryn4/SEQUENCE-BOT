@@ -140,26 +140,27 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
             "-map", "1:s?",
             
             "-c:v", "copy",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-ac", "2",
-            "-ar", "48000",
             
-            # --- SILENCE & GAP FIX ---
-            # 'aresample=async=1' ki jagah 'aresample=async=1000' aur 'apad' use kar rahe hain
-            # async=1000 se chote gaps fill ho jayenge bina silent kiye
-            "-af", "aresample=async=1000:min_hard_comp=0.010000:first_pts=0,apad",
+            # --- THE ULTIMATE SEEK & SILENCE FIX ---
+            "-c:a", "aac",
+            "-b:a", "192k",        # Thoda high bitrate better compatibility ke liye
+            "-ac", "2",
+            "-ar", "44100",        # Universal standard frequency
+            
+            # Filter changes: 'async' hata kar 'aresample' ko simple rakha hai
+            # aur '-bsf:a aac_adtstoasc' add kiya hai jo seek issues fix karta hai
+            "-af", "aresample=min_hard_comp=0.010000:first_pts=0",
             
             "-max_interleave_delta", "100M",
             "-movflags", "+faststart",
             "-avoid_negative_ts", "make_zero",
+            
+            # ADTS fix specifically for AAC in MKV/MP4 containers (Seek lag fix)
+            "-bsf:a", "aac_adtstoasc", 
+            
             "-map_metadata", "-1",
             "-map_chapters", "0",
             "-ignore_unknown",
-            "-copyts",
-            
-            # Short audio ko video ke end tak stretch karne ke liye
-            "-shortest", 
             
             "-c:s", "copy",
             "-disposition:a:0", "default",
