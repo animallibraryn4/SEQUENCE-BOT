@@ -125,51 +125,54 @@ def extract_streams_info(media_info: Dict) -> Dict:
         "subtitle_streams": subtitle_streams,
         "total_streams": len(media_info.get("streams", []))
     }
+
 def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
     try:
+        # Step 1: Pehle Source Audio ko Target Video ke standards par convert karna
+        # Isse audio bilkul "clean" ho jayega merge se pehle
+        temp_audio = "temp_clean_audio.m4a"
+        
+        # Audio ko clean karne ki command
+        clean_cmd = [
+            "ffmpeg", "-y", "-i", source_path,
+            "-vn",                       # Video hatao (sirf audio chahiye)
+            "-ac", "2",                  # Stereo force karo
+            "-ar", "44100",              # Standard frequency
+            "-c:a", "aac", "-b:a", "192k",
+            "-af", "aresample=async=1:min_hard_comp=0.01:first_pts=0",
+            temp_audio
+        ]
+        subprocess.run(clean_cmd, capture_output=True)
+
+        # Step 2: Ab is Clean Audio ko Main Video ke saath merge karna
         cmd = [
             "ffmpeg", "-y",
             "-i", target_path,
-            "-i", source_path,
+            "-i", temp_audio,            # Clean audio use kar rahe hain
             
-            "-map", "0:v:0",
-            "-map", "0:a?",
-            "-map", "1:a?",
-            "-map", "0:s?",
-            "-map", "1:s?",
+            "-map", "0:v:0",             # Main Video
+            "-map", "0:a?",              # Main Audio (agar hai)
+            "-map", "1:a",               # Hamara naya Clean Audio
+            "-map", "0:s?",              # Subtitles
             
-            # --- VIDEO RE-SYNC FIX ---
-            # Hum video ko 'ultrafast' encode karenge taaki naye aur sahi timestamps bane
-            "-c:v", "libx264", 
-            "-preset", "ultrafast", 
-            "-crf", "23",          # Quality maintain rahegi
-            
-            # --- AUDIO HARD SYNC ---
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-ac", "2",
-            "-ar", "44100",
-            
-            # Ye filter audio ko video ke timestamps (PTS) ke saath lock kar dega
-            "-af", "aresample=async=1:min_hard_comp=0.01,asetpts=PTS",
+            "-c:v", "copy",              # Video copy (ab lag nahi karega)
+            "-c:a", "copy",              # Audio ab copy chalega kyunki pehle hi re-code ho gaya
+            "-c:s", "copy",
             
             "-max_interleave_delta", "200M",
             "-avoid_negative_ts", "make_zero",
             "-movflags", "+faststart",
-            
-            # Container level synchronization
-            "-fflags", "+genpts",
-            
-            "-c:s", "copy",
-            "-disposition:a:0", "default",
+            "-disposition:a:1", "default", # Naye audio ko default set karein
             output_path
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print("FFmpeg error:", result.stderr[:500])
-            return False
-        return True
+        
+        # Cleanup temp file
+        if os.path.exists(temp_audio):
+            os.remove(temp_audio)
+            
+        return result.returncode == 0
 
     except Exception as e:
         print("Merge failed:", e)
