@@ -127,140 +127,30 @@ def extract_streams_info(media_info: Dict) -> Dict:
     }
 
 def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
+    """FFmpeg Fallback: Sab streams ko map karega bina delete kiye"""
     try:
         cmd = [
             "ffmpeg", "-y",
-            "-i", target_path,     # input 0 (video base)
-            "-i", source_path,     # input 1 (audio + subs)
+            "-i", target_path,     # input 0
+            "-i", source_path,     # input 1
             
-            # map video from target
-            "-map", "0:v",
+            "-map", "0:v",         # Target video
+            "-map", "0:a?",        # Target audio (if exists)
+            "-map", "0:s?",        # Target subtitles (PRESERVE)
             
-            # map all target audio
-            "-map", "0:a?",
+            "-map", "1:a?",        # Source audio (ADD)
+            "-map", "1:s?",        # Source subtitles (ADD)
             
-            # map all source audio
-            "-map", "1:a?",
-            
-            # map subtitles from source
-            "-map", "1:s?",
-            
-            # copy everything
-            "-c", "copy",
-            
-            # set default audio = first target audio
-            "-disposition:a:0", "default",
-            
-            # ensure subs are selectable
-            "-disposition:s", "0",
-            
-            # fix metadata
-            "-map_metadata", "0",
-            
+            "-c", "copy",          # No re-encoding
+            "-map_metadata", "0",  # Keep target metadata
             output_path
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode != 0:
-            print("FFmpeg error:", result.stderr[:500])
-            return False
-
-        return True
+        return result.returncode == 0
 
     except Exception as e:
-        print("Merge failed:", e)
-        return False
-        
-        # Extract stream information
-        source_streams = extract_streams_info(source_info)
-        target_streams = extract_streams_info(target_info)
-        
-        print(f"Source: {len(source_streams['audio_streams'])} audio, {len(source_streams['subtitle_streams'])} subtitle streams")
-        print(f"Target: {len(target_streams['audio_streams'])} audio, {len(target_streams['subtitle_streams'])} subtitle streams")
-        
-        # Build ffmpeg command
-        cmd = ['ffmpeg', '-y']
-        
-        # Input files
-        cmd.extend(['-i', target_path])
-        cmd.extend(['-i', source_path])
-        
-        # Map ALL streams from target (input 0)
-        cmd.extend(['-map', '0'])
-        
-        # Map audio streams from source (input 1)
-        if source_streams['audio_streams']:
-            cmd.extend(['-map', '1:a'])
-        
-        # Map subtitle streams from source (input 1)
-        if source_streams['subtitle_streams']:
-            cmd.extend(['-map', '1:s'])
-        
-        # Copy all codecs (no re-encoding)
-        cmd.extend(['-c', 'copy'])
-        
-        # Disposition handling - preserve target dispositions, add source as default
-        # Get total streams count after mapping
-        total_target_streams = target_streams['total_streams']
-        total_source_audio = len(source_streams['audio_streams'])
-        total_source_sub = len(source_streams['subtitle_streams'])
-        
-        # Set dispositions: target streams keep their dispositions
-        # Source audio/subtitles get default disposition
-        stream_idx = total_target_streams
-        
-        # Set source audio streams to default disposition
-        for i in range(total_source_audio):
-            cmd.extend(['-disposition:a:{}'.format(stream_idx), 'default'])
-            stream_idx += 1
-        
-        # Set source subtitle streams to default disposition
-        for i in range(total_source_sub):
-            cmd.extend(['-disposition:s:{}'.format(stream_idx), 'default'])
-            stream_idx += 1
-        
-        # Set metadata
-        cmd.extend(['-metadata:s:a', 'handler="Added from source file"'])
-        cmd.extend(['-metadata:s:s', 'handler="Added from source file"'])
-        
-        # Output file
-        cmd.append(output_path)
-        
-        print(f"Running FFmpeg command: {' '.join(cmd)}")
-        
-        # Run ffmpeg
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            print("Merge successful!")
-            
-            # Verify output
-            output_info = get_media_info(output_path)
-            output_streams = extract_streams_info(output_info)
-            
-            print(f"Output: {len(output_streams['audio_streams'])} audio, {len(output_streams['subtitle_streams'])} subtitle streams")
-            
-            # Check if streams were added
-            expected_audio = len(target_streams['audio_streams']) + len(source_streams['audio_streams'])
-            expected_sub = len(target_streams['subtitle_streams']) + len(source_streams['subtitle_streams'])
-            
-            actual_audio = len(output_streams['audio_streams'])
-            actual_sub = len(output_streams['subtitle_streams'])
-            
-            print(f"Expected: {expected_audio} audio, {expected_sub} subtitle streams")
-            print(f"Actual: {actual_audio} audio, {actual_sub} subtitle streams")
-            
-            return True
-        else:
-            print(f"FFmpeg error (return code {result.returncode}):")
-            print(f"Stderr: {result.stderr[:500]}")
-            return False
-            
-    except Exception as e:
-        print(f"Merge error: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print("FFmpeg merge failed:", e)
         return False
 
 def get_file_extension(file_path: str) -> str:
@@ -269,21 +159,25 @@ def get_file_extension(file_path: str) -> str:
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Safe MKV merge:
-    - Keeps target video + subtitles
-    - Adds audio from source
-    - Adds subtitles from source ONLY if present
+    Behavior:
+    - Target Video: Kept
+    - Target Audio: Kept (Optional: drop if you want ONLY source audio)
+    - Target Subtitles: Kept (Preserved)
+    - Source Audio: Added
+    - Source Subtitles: Added
     """
     try:
+        # MKVMERGE logic (Best for preserving everything)
+        # Isme hum target ke video, audio aur subs sab le rahe hain
+        # Aur source se sirf audio aur subs utha rahe hain
         mkvmerge_cmd = [
             "mkvmerge",
             "-o", output_path,
-
-            # Target file: keep video + subs, drop audio
-            "--no-audio",
+            
+            # Target file: Sab kuch rakho (Video, Audio, Subtitles)
             target_path,
 
-            # Source file: keep audio + subs, drop video
+            # Source file: Sirf audio aur subs uthao, video drop kar do
             "--no-video",
             source_path
         ]
@@ -295,23 +189,12 @@ def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path
             return True
         else:
             print("mkvmerge failed, falling back to FFmpeg")
-            print(result.stderr[:300])
             return merge_audio_subtitles_v2(source_path, target_path, output_path)
 
     except FileNotFoundError:
-        print("mkvmerge not found, using FFmpeg")
         return merge_audio_subtitles_v2(source_path, target_path, output_path)
-
     except Exception as e:
         print("mkvmerge error:", e)
-        return merge_audio_subtitles_v2(source_path, target_path, output_path)
-            
-    except FileNotFoundError:
-        # mkvmerge not available, use FFmpeg
-        print("mkvmerge not found, using FFmpeg...")
-        return merge_audio_subtitles_v2(source_path, target_path, output_path)
-    except Exception as e:
-        print(f"mkvmerge error: {e}, trying FFmpeg...")
         return merge_audio_subtitles_v2(source_path, target_path, output_path)
 
 # --- TELEGRAM BOT HANDLERS ---
@@ -713,4 +596,3 @@ def get_merging_help_text() -> str:
 - Original target file tracks are preserved
 - Only new audio/subtitle tracks are added from source
 - No re-encoding (file size optimized)</blockquote>"""
-            
