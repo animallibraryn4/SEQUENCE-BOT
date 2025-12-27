@@ -958,6 +958,21 @@ def main():
     # Run the bot
     app.run()
 
+
+# Add this at the end of sequence.py (before the main() function)
+def setup_sequence_handlers(app):
+    """Register all sequence-related handlers"""
+    # All the decorators should already be registered when imported
+    # This function just ensures the app is properly set up
+    
+    # Check if ffmpeg is available
+    if not check_ffmpeg_available():
+        print("⚠️ FFmpeg not available - some features may be limited")
+    
+    print("✅ Sequence handlers registered")
+    return app
+
 if __name__ == "__main__":
     main()
+
 
