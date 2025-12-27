@@ -14,6 +14,13 @@ from database import (
     users_collection, update_user_stats, get_user_mode, set_user_mode
 )
 from start import is_subscribed, setup_start_handlers, set_bot_start_time
+# Add this import
+try:
+    from injection_handler import setup_injection_handlers
+    INJECTION_AVAILABLE = True
+except ImportError:
+    INJECTION_AVAILABLE = False
+    print("Injection module not available. /inject command will be disabled.")
 
 # Bot start time for uptime calculation
 BOT_START_TIME = time.time()
@@ -887,3 +894,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
