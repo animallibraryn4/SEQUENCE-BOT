@@ -10,6 +10,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from config import OWNER_ID
 from start import is_subscribed
+import audio_injector
 
 # Merging state management
 merging_users = {}  # Store user's merging state
@@ -167,45 +168,42 @@ def get_file_extension(file_path: str) -> str:
     """Get file extension from path"""
     return Path(file_path).suffix.lower()
 
+
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Behavior:
-    - Target Video: Kept
-    - Target Audio: Kept (Optional: drop if you want ONLY source audio)
-    - Target Subtitles: Kept (Preserved)
-    - Source Audio: Added
-    - Source Subtitles: Added
+    Try multiple methods for best results
     """
+    print(f"Merging: {source_path} -> {target_path}")
+    
+    # Method 1: Try mkvmerge first (best for MKV)
     try:
-        # MKVMERGE logic (Best for preserving everything)
-        # Isme hum target ke video, audio aur subs sab le rahe hain
-        # Aur source se sirf audio aur subs utha rahe hain
         mkvmerge_cmd = [
             "mkvmerge",
             "-o", output_path,
-            
-            # Target file: Sab kuch rakho (Video, Audio, Subtitles)
             target_path,
-
-            # Source file: Sirf audio aur subs uthao, video drop kar do
             "--no-video",
             source_path
         ]
-
+        
         result = subprocess.run(mkvmerge_cmd, capture_output=True, text=True)
-
         if result.returncode == 0:
-            print("Merge successful with mkvmerge")
+            print("✅ Success with mkvmerge")
             return True
-        else:
-            print("mkvmerge failed, falling back to FFmpeg")
-            return merge_audio_subtitles_v2(source_path, target_path, output_path)
-
     except FileNotFoundError:
-        return merge_audio_subtitles_v2(source_path, target_path, output_path)
+        print("mkvmerge not found, trying other methods...")
     except Exception as e:
-        print("mkvmerge error:", e)
-        return merge_audio_subtitles_v2(source_path, target_path, output_path)
+        print(f"mkvmerge error: {e}")
+    
+    # Method 2: Seek-safe injection (better for seeking)
+    print("Trying Method 2 (seek-safe injection)...")
+    if audio_injector.merge_audio_subtitles_method2(source_path, target_path, output_path):
+        print("✅ Success with Method 2")
+        return True
+    
+    # Method 3: Fallback to original FFmpeg
+    print("Falling back to FFmpeg method...")
+    return merge_audio_subtitles_v2(source_path, target_path, output_path)
+    
 
 # --- TELEGRAM BOT HANDLERS ---
 def setup_merging_handlers(app: Client):
@@ -606,3 +604,7 @@ def get_merging_help_text() -> str:
 - Original target file tracks are preserved
 - Only new audio/subtitle tracks are added from source
 - No re-encoding (file size optimized)</blockquote>"""
+
+
+
+
