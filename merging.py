@@ -126,41 +126,156 @@ def extract_streams_info(media_info: Dict) -> Dict:
         "total_streams": len(media_info.get("streams", []))
     }
 
+def analyze_audio_streams(file_path: str) -> Dict:
+    """Analyze audio streams for compatibility"""
+    info = get_media_info(file_path)
+    audio_streams = []
+    
+    for stream in info.get("streams", []):
+        if stream.get("codec_type") == "audio":
+            audio_info = {
+                "index": stream.get("index"),
+                "codec": stream.get("codec_name"),
+                "sample_rate": stream.get("sample_rate"),
+                "channels": stream.get("channels"),
+                "duration": stream.get("duration"),
+                "start_time": stream.get("start_time"),
+                "language": stream.get("tags", {}).get("language", "und"),
+                "delay": stream.get("tags", {}).get("delay", "0"),
+                "title": stream.get("tags", {}).get("title", "")
+            }
+            audio_streams.append(audio_info)
+    
+    return {
+        "has_audio": len(audio_streams) > 0,
+        "audio_streams": audio_streams,
+        "main_audio": audio_streams[0] if audio_streams else None
+    }
+
+def normalize_audio(file_path: str) -> bool:
+    """Normalize audio levels to prevent silent audio"""
+    try:
+        temp_file = file_path + ".temp.mkv"
+        
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", file_path,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",  # Normalize audio
+            "-c:s", "copy",
+            temp_file
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        
+        if result.returncode == 0 and os.path.exists(temp_file):
+            os.replace(temp_file, file_path)
+            print("Audio normalized successfully")
+            return True
+        return False
+    except:
+        return False
+
 def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
     try:
+        # First, analyze both files to get audio delays and formats
+        source_info = get_media_info(source_path)
+        target_info = get_media_info(target_path)
+        
+        # Extract audio delay information
+        source_delay = 0
+        target_delay = 0
+        
+        for stream in source_info.get("streams", []):
+            if stream.get("codec_type") == "audio":
+                delay_tag = stream.get("tags", {}).get("delay", "0")
+                try:
+                    source_delay = int(delay_tag)
+                except:
+                    pass
+                break
+        
+        for stream in target_info.get("streams", []):
+            if stream.get("codec_type") == "audio":
+                delay_tag = stream.get("tags", {}).get("delay", "0")
+                try:
+                    target_delay = int(delay_tag)
+                except:
+                    pass
+                break
+        
+        # Calculate delay difference in seconds (convert from milliseconds if needed)
+        delay_diff = (target_delay - source_delay) / 1000000.0  # Convert to seconds
+        
+        # Build FFmpeg command with proper sync
         cmd = [
             "ffmpeg", "-y",
             "-i", target_path,     # input 0 (Target Video)
             "-i", source_path,     # input 1 (Source Audio/Subs)
             
+            # Map streams properly
             "-map", "0:v:0",       # Target video
-            "-map", "0:a?",        # Target audio (Original)
-            "-map", "1:a?",        # Source audio (Added)
-            "-map", "0:s?",        # Target subs
-            "-map", "1:s?",        # Source subs
+            "-map", "1:a?",        # Source audio first (priority)
+            "-map", "0:a?",        # Target audio (original, optional)
+            "-map", "1:s?",        # Source subtitles
+            "-map", "0:s?",        # Target subtitles
             
-            "-c:v", "copy",        # Video same rahegi (No lag)
-            "-c:a", "aac",         # Audio re-encode (Sync ke liye zaroori hai)
+            # Video: copy without re-encoding
+            "-c:v", "copy",
+            
+            # Audio: ensure proper format and sync
+            "-c:a", "aac",         # Convert to AAC for compatibility
             "-b:a", "192k",        # Good quality bitrate
-            "-ac", "2",            # Compatibility ke liye stereo
-            "-af", "aresample=async=1", # SYNC FIX: Audio gaps ko fill karta hai
+            "-ar", "48000",        # Standard sample rate
+            "-ac", "2",            # Stereo for compatibility
             
-            "-c:s", "copy",        # Subtitles copy
+            # CRITICAL: Audio sync fixes
+            "-async", "1",         # Force audio resync
+            "-copyts",             # Copy timestamps
+            "-muxdelay", "0",      # Remove muxing delay
             
+            # Apply delay compensation if needed
+            *(["-itsoffset", str(delay_diff), "-i", source_path, "-map", "2:a?"] if abs(delay_diff) > 0.01 else []),
+            
+            # Subtitles: copy
+            "-c:s", "copy",
+            
+            # Metadata and disposition
+            "-metadata:s:a:0", "title=Merged Audio (Source)",
             "-disposition:a:0", "default",
+            "-metadata:s:a:1", "title=Original Audio (Target)",
+            "-disposition:a:1", "0",
             "-map_metadata", "0",
+            
+            # Output
             output_path
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        print(f"FFmpeg command: {' '.join(cmd[:30])}...")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             print("FFmpeg error:", result.stderr[:500])
+            
+            # Fallback to simpler method
+            return merge_audio_subtitles_simple(source_path, target_path, output_path)
+        
+        # Verify the output file
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
+            print(f"Merge successful: {output_path}")
+            return True
+        else:
+            print("Output file not created or too small")
             return False
-        return True
 
+    except subprocess.TimeoutExpired:
+        print("FFmpeg timeout - using fallback method")
+        return merge_audio_subtitles_simple(source_path, target_path, output_path)
     except Exception as e:
-        print("Merge failed:", e)
-        return False
+        print("Merge failed:", str(e))
+        return merge_audio_subtitles_simple(source_path, target_path, output_path)
         
 
 def get_file_extension(file_path: str) -> str:
@@ -169,42 +284,53 @@ def get_file_extension(file_path: str) -> str:
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Behavior:
-    - Target Video: Kept
-    - Target Audio: Kept (Optional: drop if you want ONLY source audio)
-    - Target Subtitles: Kept (Preserved)
-    - Source Audio: Added
-    - Source Subtitles: Added
+    Improved version with better audio handling
     """
     try:
-        # MKVMERGE logic (Best for preserving everything)
-        # Isme hum target ke video, audio aur subs sab le rahe hain
-        # Aur source se sirf audio aur subs utha rahe hain
+        # First analyze audio streams
+        source_audio = analyze_audio_streams(source_path)
+        target_audio = analyze_audio_streams(target_path)
+        
+        if not source_audio["has_audio"]:
+            print("No audio in source file - cannot merge")
+            return False
+        
+        # MKVMERGE approach with audio normalization
         mkvmerge_cmd = [
             "mkvmerge",
             "-o", output_path,
             
-            # Target file: Sab kuch rakho (Video, Audio, Subtitles)
+            # Target file
+            "--no-audio" if source_audio["has_audio"] else "",  # Remove target audio if we have source audio
             target_path,
-
-            # Source file: Sirf audio aur subs uthao, video drop kar do
+            
+            # Source file: take only audio and subs
             "--no-video",
+            "--audio-tracks", "0",  # Take first audio track
             source_path
         ]
+        
+        # Filter out empty strings
+        mkvmerge_cmd = [x for x in mkvmerge_cmd if x]
+        
+        print(f"Running mkvmerge: {' '.join(mkvmerge_cmd)}")
+        result = subprocess.run(mkvmerge_cmd, capture_output=True, text=True, timeout=300)
 
-        result = subprocess.run(mkvmerge_cmd, capture_output=True, text=True)
-
-        if result.returncode == 0:
+        if result.returncode == 0 and os.path.exists(output_path):
             print("Merge successful with mkvmerge")
+            
+            # Optional: Normalize audio levels
+            normalize_audio(output_path)
             return True
         else:
-            print("mkvmerge failed, falling back to FFmpeg")
+            print(f"mkvmerge failed: {result.stderr[:200]}")
             return merge_audio_subtitles_v2(source_path, target_path, output_path)
 
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        print(f"mkvmerge error: {e}")
         return merge_audio_subtitles_v2(source_path, target_path, output_path)
     except Exception as e:
-        print("mkvmerge error:", e)
+        print(f"Unexpected error: {e}")
         return merge_audio_subtitles_v2(source_path, target_path, output_path)
 
 # --- TELEGRAM BOT HANDLERS ---
@@ -606,3 +732,4 @@ def get_merging_help_text() -> str:
 - Original target file tracks are preserved
 - Only new audio/subtitle tracks are added from source
 - No re-encoding (file size optimized)</blockquote>"""
+ 
