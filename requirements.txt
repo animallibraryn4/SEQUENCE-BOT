@@ -1,11 +1,10 @@
 pyrofork
-tgcrypto
-pymongo
+pyrogram==2.0.106
+tgcrypto==1.2.5
+pymongo==4.5.0
 Flask==2.3.3
-ffmpeg-python
+ffmpeg-python==0.2.0
 
-
-# For Debian/Ubuntu based systems:
-#apt-get update && apt-get install -y ffmpeg mkvtoolnix
-
-# For Alpine Linux:
+# For system dependencies (add to Dockerfile or setup script):
+# ffmpeg
+# mkvtoolnix
