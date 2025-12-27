@@ -130,40 +130,41 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
     try:
         cmd = [
             "ffmpeg", "-y",
-            "-i", target_path,     # input 0 (video base)
-            "-i", source_path,     # input 1 (audio + subs)
-            
-            # map video from target
+
+            # inputs
+            "-i", target_path,   # 0 = target
+            "-i", source_path,   # 1 = source
+
+            # video (only from target)
             "-map", "0:v",
-            
-            # map all target audio
+
+            # audio (target + source)
             "-map", "0:a?",
-            
-            # map all source audio
             "-map", "1:a?",
-            
-            # map subtitles from source
+
+            # subtitles (IMPORTANT: both)
+            "-map", "0:s?",
             "-map", "1:s?",
-            
-            # copy everything
+
+            # no re-encode
             "-c", "copy",
-            
-            # set default audio = first target audio
+
+            # default audio = target first audio
             "-disposition:a:0", "default",
-            
-            # ensure subs are selectable
+
+            # subtitles selectable, none forced
             "-disposition:s", "0",
-            
-            # fix metadata
+
+            # keep metadata
             "-map_metadata", "0",
-            
+
             output_path
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
 
         if result.returncode != 0:
-            print("FFmpeg error:", result.stderr[:500])
+            print("FFmpeg error:", result.stderr[:400])
             return False
 
         return True
