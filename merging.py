@@ -284,31 +284,42 @@ def get_file_extension(file_path: str) -> str:
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Simple but reliable merging using mkvmerge (if available)
+    Safe MKV merge:
+    - Keeps target video + subtitles
+    - Adds audio from source
+    - Adds subtitles from source ONLY if present
     """
     try:
-        # First try using mkvmerge (more reliable for MKV files)
         mkvmerge_cmd = [
-            'mkvmerge',
-            '-o', output_path,
+            "mkvmerge",
+            "-o", output_path,
+
+            # Target file: keep video + subs, drop audio
+            "--no-audio",
             target_path,
-            '--no-audio',
-            '--no-subtitles',
-            source_path,
-            '--no-video',
-            '--no-chapters',
-            '--no-attachments',
-            '--no-track-tags',
-            '--no-global-tags'
+
+            # Source file: keep audio + subs, drop video
+            "--no-video",
+            source_path
         ]
-        
+
         result = subprocess.run(mkvmerge_cmd, capture_output=True, text=True)
-        
+
         if result.returncode == 0:
-            print("Merge successful with mkvmerge!")
+            print("Merge successful with mkvmerge")
             return True
         else:
-            print(f"mkvmerge failed, trying FFmpeg...")
+            print("mkvmerge failed, falling back to FFmpeg")
+            print(result.stderr[:300])
+            return merge_audio_subtitles_v2(source_path, target_path, output_path)
+
+    except FileNotFoundError:
+        print("mkvmerge not found, using FFmpeg")
+        return merge_audio_subtitles_v2(source_path, target_path, output_path)
+
+    except Exception as e:
+        print("mkvmerge error:", e)
+        return merge_audio_subtitles_v2(source_path, target_path, output_path)
             
             # Fallback to FFmpeg
             return merge_audio_subtitles_v2(source_path, target_path, output_path)
