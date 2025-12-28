@@ -1,3 +1,26 @@
+        # ... (rest of the command setup)
+        
+        # Sync fixes and Disposition
+        cmd.extend([
+            "-fflags", "+genpts",
+            "-avoid_negative_ts", "make_zero",
+            
+            # This is the crucial part:
+            "-disposition:a:0", "0",        # Make the first audio track (Target) NOT default
+            "-disposition:a:1", "default",  # Make the second audio track (Source) the DEFAULT
+            
+            "-map_metadata", "0",
+        ])
+        
+        cmd.append(output_path)
+
+
+
+
+
+
+
+
 import os
 import re
 import asyncio
@@ -382,17 +405,19 @@ def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output
         
         print(f"V2 Subtitle Info: Target subs: {len(target_streams['subtitle_streams'])}, "
               f"Source subs: {len(source_streams['subtitle_streams'])}")
-        
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", target_path,
-            "-i", source_path,
+      
+        cmd.extend([
+            "-fflags", "+genpts",
+            "-avoid_negative_ts", "make_zero",
             
-            # Stream mapping - always map target video
-            "-map", "0:v:0",
-            "-map", "0:a?",              # Target audio
-            "-map", "1:a?",              # Source audio
-        ]
+            # This is the crucial part:
+            "-disposition:a:0", "0",        # Make the first audio track (Target) NOT default
+            "-disposition:a:1", "default",  # Make the second audio track (Source) the DEFAULT
+            
+            "-map_metadata", "0",
+        ])
+        
+        cmd.append(output_path)
         
         # Handle subtitles based on logic
         if target_has_subs:
