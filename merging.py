@@ -73,17 +73,36 @@ async def progress_callback(current, total, msg, start_time, stage, filename):
 
 # --- PARSING ENGINE FOR EPISODE MATCHING ---
 def parse_episode_info(filename: str) -> Dict:
+    """
+    Smart season/episode parser
+    Supports: S1-01, S01E01, 1x01, EP01, Episode 01, etc.
+    """
     name = filename.lower()
 
-    patterns = [
-        r's\s*(\d+)[\s._-]*e\s*(\d+)',      # S01E01, S1_E1, S01-E01
-        r'season\s*(\d+)[\s._-]*episode\s*(\d+)',
-        r'(\d+)[xX](\d+)',                  # 1x01
-        r'ep\s*(\d+)',                      # EP01
-    ]
+    # normalize separators
+    name = re.sub(r'[._]', ' ', name)
+    name = re.sub(r'\s+', ' ', name)
 
-    season = 1
-    episode = 0
+    season = None
+    episode = None
+
+    patterns = [
+
+        # S01E01, S1 E1, S01-E01
+        r's\s*(\d{1,2})\s*e\s*(\d{1,3})',
+
+        # S1 - 01, S01 01, S2_12
+        r's\s*(\d{1,2})\s*[- ]\s*(\d{1,3})',
+
+        # Season 1 Episode 01
+        r'season\s*(\d{1,2})\s*(?:episode|ep)?\s*(\d{1,3})',
+
+        # 1x01
+        r'(\d{1,2})\s*x\s*(\d{1,3})',
+
+        # Episode 01, EP01, E01
+        r'(?:episode|ep|e)\s*(\d{1,3})',
+    ]
 
     for p in patterns:
         m = re.search(p, name)
@@ -95,8 +114,20 @@ def parse_episode_info(filename: str) -> Dict:
                 episode = int(m.group(1))
             break
 
-    return {"season": season, "episode": episode}
-    
+    # fallback: standalone episode number (LAST option)
+    if episode is None:
+        m = re.search(r'\b(\d{1,3})\b', name)
+        if m:
+            episode = int(m.group(1))
+
+    # default season
+    if season is None:
+        season = 1
+
+    return {
+        "season": season,
+        "episode": episode if episode is not None else 0
+    }
 
 def match_files_by_episode(source_files: List[Dict], target_files: List[Dict]) -> List[Tuple[Dict, Dict]]:
     """Match source and target files by season and episode"""
@@ -104,21 +135,32 @@ def match_files_by_episode(source_files: List[Dict], target_files: List[Dict]) -
     
     for target in target_files:
         target_info = parse_episode_info(target.get("filename", ""))
-        
+
+        # 🚫 IMPORTANT FIX:
+        # Agar episode detect nahi hua, to skip karo
+        if target_info["episode"] == 0:
+            print(f"[SKIP] Episode not detected in target: {target.get('filename')}")
+            continue
+
         # Find matching source file
+        found = False
         for source in source_files:
             source_info = parse_episode_info(source.get("filename", ""))
-            
-            if (source_info["season"] == target_info["season"] and 
-                source_info["episode"] == target_info["episode"]):
+
+            if (
+                source_info["season"] == target_info["season"] and
+                source_info["episode"] == target_info["episode"]
+            ):
                 matched_pairs.append((source, target))
+                found = True
                 break
-        else:
-            # If no match found, add None for source
+
+        # Agar match nahi mila, to source None rakho
+        if not found:
             matched_pairs.append((None, target))
     
     return matched_pairs
-
+    
 # --- IMPROVED FFMPEG UTILITIES ---
 def get_media_info(file_path: str) -> Dict:
     """Get detailed media information using ffprobe"""
