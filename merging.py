@@ -1,26 +1,3 @@
-        # ... (rest of the command setup)
-        
-        # Sync fixes and Disposition
-        cmd.extend([
-            "-fflags", "+genpts",
-            "-avoid_negative_ts", "make_zero",
-            
-            # This is the crucial part:
-            "-disposition:a:0", "0",        # Make the first audio track (Target) NOT default
-            "-disposition:a:1", "default",  # Make the second audio track (Source) the DEFAULT
-            
-            "-map_metadata", "0",
-        ])
-        
-        cmd.append(output_path)
-
-
-
-
-
-
-
-
 import os
 import re
 import asyncio
