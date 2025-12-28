@@ -11,7 +11,6 @@ else:
 # Baaki ka purana code iske niche rahega...
 
 import asyncio
-import merging
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN
 import sequence  # This will register sequence handlers
