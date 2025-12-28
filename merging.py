@@ -449,10 +449,10 @@ def get_file_extension(file_path: str) -> str:
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Main merging function with MX Player compatibility and proper subtitle handling
+    Simple merge function - Uses v2 method with MX Player fixes only
     """
     try:
-        print(f"\n=== Starting MX Player Compatible Merge ===")
+        print(f"\n=== Starting Simple Merge ===")
         
         # Get media info for subtitle check
         target_info = get_media_info(target_path)
@@ -461,56 +461,23 @@ def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path
         target_streams = extract_streams_info(target_info)
         source_streams = extract_streams_info(source_info)
         
-        print(f"Target has {len(target_streams['subtitle_streams'])} subtitle streams")
-        print(f"Source has {len(source_streams['subtitle_streams'])} subtitle streams")
+        print(f"Target subtitles: {len(target_streams['subtitle_streams'])}, Source subtitles: {len(source_streams['subtitle_streams'])}")
         
-        # Determine output format based on target
-        target_ext = get_file_extension(target_path)
-        if not output_path.endswith(target_ext):
-            output_path = output_path.rsplit('.', 1)[0] + target_ext
-        
-        print(f"Target format: {target_info.get('format', {}).get('format_name', 'unknown')}")
-        print(f"Target video codec: {[s.get('codec_name') for s in target_info.get('streams', []) if s.get('codec_type') == 'video']}")
-        
-        # Check if we have audio to add
+        # Check if we have anything to add
         if not source_streams["audio_streams"] and not source_streams["subtitle_streams"]:
             print("No audio or subtitles to add from source")
             return False
         
-        # Try MX Player optimized merge first
-        if merge_for_mx_player_compatibility(source_path, target_path, output_path):
-            print("=== MX Player Optimized Merge Successful ===")
-            
-            # Verify subtitles in output
-            output_info = get_media_info(output_path)
-            output_streams = extract_streams_info(output_info)
-            print(f"Output has {len(output_streams['subtitle_streams'])} subtitle streams")
-            
-            # Additional post-processing for MX Player if needed
-            if target_ext.lower() == '.mp4':
-                # Run qt-faststart for better MP4 compatibility
-                try:
-                    temp_output = output_path + ".temp"
-                    os.rename(output_path, temp_output)
-                    qt_cmd = ["qt-faststart", temp_output, output_path]
-                    subprocess.run(qt_cmd, capture_output=True)
-                    os.remove(temp_output)
-                    print("Applied qt-faststart for better streaming")
-                except:
-                    pass
-            
-            return True
-        else:
-            print("MX Player merge failed, trying standard method...")
-            # Fallback to standard method but with MX Player fixes
-            return merge_audio_subtitles_v2_mx_fixed(source_path, target_path, output_path)
+        # Always use v2 with MX Player fixes
+        print("Using v2 method with MX Player fixes...")
+        return merge_audio_subtitles_v2_mx_fixed(source_path, target_path, output_path)
             
     except Exception as e:
-        print(f"Error in MX Player merge: {e}")
+        print(f"Error in simple merge: {e}")
         import traceback
         traceback.print_exc()
+        # Fallback to basic v2 method
         return merge_audio_subtitles_v2(source_path, target_path, output_path)
-
 
 # --- TELEGRAM BOT HANDLERS ---
 def setup_merging_handlers(app: Client):
@@ -912,3 +879,9 @@ def get_merging_help_text() -> str:
 - Original target file tracks are preserved
 - Only new audio/subtitle tracks are added from source
 - No re-encoding (file size optimized)</blockquote>"""
+```
+        
+        if user_id in merging_users:
+            del merging_users[user_id]
+        
+    
