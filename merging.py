@@ -966,4 +966,4 @@ def get_merging_help_text() -> str:
 - MKV format works best for merging
 - Original target file tracks are preserved
 - Source audio tracks are set as default
-- No re-encoding (file size optimized)</blockquote>""
+- No re-encoding (file size optimized)</blockquote>"""
