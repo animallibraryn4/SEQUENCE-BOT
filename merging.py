@@ -1242,9 +1242,9 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                     del LAST_EDIT_TIME[user_id]
 
 # --- HELP TEXT UPDATE ---
-def get_merging_help_text() -> str:
-    """Get help text for merging commands"""
-    return """
+               def get_merging_help_text() -> str:
+                   """Get help text for merging commands"""
+                   return """
 <blockquote><b>🔧 Auto File Merging Commands</b></blockquote>
 
 <blockquote><b>/merging</b> - Start auto file merging process
