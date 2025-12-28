@@ -1,6 +1,3 @@
-
-
-
 import asyncio
 import tempfile
 import time
@@ -8,7 +5,6 @@ from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from config import OWNER_ID
-from start import is_subscribed
 
 # Import from merging.py with ALL global states
 from merging import (
@@ -17,6 +13,43 @@ from merging import (
     smart_progress_callback, cleanup_user_throttling,
     get_merging_help_text, MERGE_TASKS, cleanup_merging_session
 )
+
+# REMOVED: from start import is_subscribed
+
+async def is_subscribed(client: Client, message: Message) -> bool:
+    """
+    Simplified force subscribe check for merging handler
+    Since start.py uses the app instance, we create our own version
+    """
+    from config import FSUB_CHANNEL, FSUB_CHANNEL_2, FSUB_CHANNEL_3
+    
+    # Filter out zero/empty channel IDs
+    channels = []
+    if FSUB_CHANNEL and FSUB_CHANNEL != 0:
+        channels.append(FSUB_CHANNEL)
+    if FSUB_CHANNEL_2 and FSUB_CHANNEL_2 != 0:
+        channels.append(FSUB_CHANNEL_2)
+    if FSUB_CHANNEL_3 and FSUB_CHANNEL_3 != 0:
+        channels.append(FSUB_CHANNEL_3)
+    
+    # If no channels are configured, allow access
+    if not channels:
+        return True
+    
+    user_id = message.from_user.id
+    
+    # Check each channel
+    for channel_id in channels:
+        try:
+            user = await client.get_chat_member(channel_id, user_id)
+            if user.status == "kicked":
+                await message.reply_text("<blockquote><b>❌ You are banned from using this bot.</b></blockquote>")
+                return False
+        except Exception:
+            # User not joined or any other error
+            continue
+            
+    return True
 
 async def start_merging_process(client: Client, state: MergingState, message: Message):
     """Start the merging process"""
@@ -372,7 +405,6 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
               
     except asyncio.CancelledError:
         # Handle cancellation
-        # Handle cancellation
         print(f"Merging cancelled for user {user_id}")
         await progress_msg.edit_text(  
             "<blockquote><b>❌ Processing Cancelled</b></blockquote>\n\n"  
@@ -403,30 +435,11 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
 
 def setup_merging_handlers(app: Client):
     """Setup all merging-related handlers"""
-
-    @app.on_callback_query(filters.regex(r"^cancel_processing_(\d+)$"))
-    async def cancel_processing_callback(client, query):
-        user_id = int(query.data.split("_")[2])
-
-        # Security: user sirf apna hi process cancel kar sakta hai
-        if user_id != query.from_user.id:
-            await query.answer("Not allowed", show_alert=True)
-            return
-
-        # 🔔 Sirf CANCEL SIGNAL bhejo
-        if user_id in PROCESSING_STATES:
-            PROCESSING_STATES[user_id]["cancelled"] = True
-
-        task = MERGE_TASKS.get(user_id)
-        if task and not task.done():
-            task.cancel()
-
-        # ✅ Instant feedback (VERY IMPORTANT)
-        await query.answer("⏹️ Cancelling…", show_alert=False)    
     
     @app.on_message(filters.command("merging"))
     async def merging_command(client: Client, message: Message):
         """Start the merging process"""
+        # Use our simplified is_subscribed check
         if not await is_subscribed(client, message):
             return
         
@@ -479,8 +492,8 @@ def setup_merging_handlers(app: Client):
     @app.on_message(filters.document | filters.video)
     async def handle_merging_files(client: Client, message: Message):
         """Handle files sent during merging process"""
-        if not await is_subscribed(client, message):
-            return
+        # REMOVED: is_subscribed check here - files should be processed regardless
+        # We'll check subscription only at command start
         
         user_id = message.from_user.id
         
@@ -535,6 +548,7 @@ def setup_merging_handlers(app: Client):
     @app.on_message(filters.command("done"))
     async def done_command(client: Client, message: Message):
         """Handle /done command to proceed to next step"""
+        # Use our simplified is_subscribed check
         if not await is_subscribed(client, message):
             return
         
@@ -622,6 +636,7 @@ def setup_merging_handlers(app: Client):
     @app.on_message(filters.command("cancel_merge"))
     async def cancel_merge_command(client: Client, message: Message):
         """Cancel the merging process"""
+        # Use our simplified is_subscribed check
         if not await is_subscribed(client, message):
             return
         
