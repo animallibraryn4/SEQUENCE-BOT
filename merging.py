@@ -888,33 +888,55 @@ def setup_merging_handlers(app: Client):
                 "<blockquote>❌ No active merging session to cancel.</blockquote>"
             )
 
-async def start_merging_process(client: Client, state: MergingState, message: Message):
-    """Start the merging process"""
-    user_id = state.user_id
-    state.state = "processing"
-    state.total_files = min(len(state.source_files), len(state.target_files))
+async def smart_progress_callback(current, total, msg, start_time, stage, filename, user_id, cancel_callback_data=None):
+    """Throttled progress callback for multiple users"""
+    # Check if processing was cancelled
+    if user_id in PROCESSING_STATES and PROCESSING_STATES[user_id].get("cancelled"):
+        raise asyncio.CancelledError("Processing cancelled by user")
     
-    # Send initial processing message with cancel button
-    progress_msg = await message.reply_text(  
-        "<blockquote><b>🔄 Starting Merge Process</b></blockquote>\n\n"  
-        "<blockquote>📊 Matching files...</blockquote>",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Cancel Processing", callback_data=f"cancel_processing_{user_id}")]
-        ])
+    now = time.time()
+    
+    # Check if we should update (throttle)
+    if user_id in LAST_EDIT_TIME:
+        time_since_last = now - LAST_EDIT_TIME[user_id]
+        if time_since_last < EDIT_INTERVAL:
+            return
+    
+    diff = now - start_time
+    
+    if diff == 0 or total == 0:
+        return
+    
+    speed = current / diff
+    percent = current * 100 / total
+    eta = (total - current) / speed if speed > 0 else 0
+    
+    text = (
+        f"<blockquote><b>{stage}</b></blockquote>\n\n"
+        f"<blockquote>📁 {filename}</blockquote>\n\n"
+        f"<blockquote>{make_bar(percent)}</blockquote>\n"
+        f"<blockquote>"
+        f"» Size  : {current/1024/1024:.1f} MB / {total/1024/1024:.1f} MB\n"
+        f"» Done  : {percent:.2f}%\n"
+        f"» Speed : {speed/1024/1024:.2f} MB/s\n"
+        f"» ETA   : {format_eta(eta)}"
+        f"</blockquote>"
     )
     
-    # Store progress message reference in state
-    state.progress_msg = progress_msg
+    # Add cancel button if callback data provided
+    reply_markup = None
+    if cancel_callback_data:
+        reply_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel Processing", callback_data=cancel_callback_data)]
+        ])
     
-    # Start the merging process in background  
-    asyncio.create_task(process_merging(client, state, progress_msg))
+    try:
+        await msg.edit_text(text, reply_markup=reply_markup)
+        LAST_EDIT_TIME[user_id] = now
+    except Exception as e:
+        # If message was deleted or other error, don't update last edit time
+        pass
 
-# Throttle edit per message (multi-user safe)
-LAST_EDIT_TIME = {}
-EDIT_INTERVAL = 1.2  # seconds
-
-# Global processing state to track cancellations
-PROCESSING_STATES = {}
 
 async def smart_progress_callback(current, total, msg, start_time, stage, filename, user_id, msg_id):
     """Throttled progress callback for multiple users with cancel check"""
@@ -1271,3 +1293,43 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                 # Clear throttle before next file
                 if user_id in LAST_EDIT_TIME:
                     del LAST_EDIT_TIME[user_id]
+                
+                # Small delay to avoid flooding  
+                await asyncio.sleep(1)  
+              
+            # Final completion message  
+            await progress_msg.edit_text(  
+                "<blockquote><b>✅ All Merges Completed</b></blockquote>\n\n"  
+                "<blockquote>🎉 All merged files have been sent to you!</blockquote>"  
+            )  
+              
+    except asyncio.CancelledError:
+        # Handle cancellation
+        print(f"Merging cancelled for user {user_id}")
+        await progress_msg.edit_text(  
+            "<blockquote><b>❌ Processing Cancelled</b></blockquote>\n\n"  
+            "<blockquote>🚫 Merging process was cancelled by user.</blockquote>\n"
+            "<blockquote>Use <code>/merging</code> to start again.</blockquote>"  
+        )
+    except Exception as e:  
+        print(f"Merge process error: {str(e)}")  
+        import traceback  
+        traceback.print_exc()  
+        try:  
+            await progress_msg.edit_text(  
+                "<blockquote>❌ An error occurred during merging.</blockquote>\n"  
+                "<blockquote>Please try again with different files.</blockquote>"  
+            )  
+        except:  
+            pass  
+    
+    finally:
+        # Clean up processing state
+        if user_id in PROCESSING_STATES:
+            del PROCESSING_STATES[user_id]
+        if user_id in LAST_EDIT_TIME:
+            del LAST_EDIT_TIME[user_id]
+        if user_id in merging_users:  
+            del merging_users[user_id]
+                      
+ 
