@@ -544,4 +544,141 @@ def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output
     """
     try:
         # Get media info
-        target_info = get_media_i
+        target_info = get_media_info(target_path)
+        source_info = get_media_info(source_path)
+        
+        target_streams = extract_streams_info(target_info)
+        source_streams = extract_streams_info(source_info)
+        
+        target_has_subs = len(target_streams["subtitle_streams"]) > 0
+        source_has_subs = len(source_streams["subtitle_streams"]) > 0
+        
+        print(f"V2 Subtitle Info: Target subs: {len(target_streams['subtitle_streams'])}, "
+              f"Source subs: {len(source_streams['subtitle_streams'])}")
+        
+        # Build the ffmpeg command
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", target_path,  # Input 0: Target file
+            "-i", source_path,  # Input 1: Source file
+        ]
+        
+        # Map streams in order
+        mappings = [
+            "-map", "0:v:0",    # Target video (first video stream)
+        ]
+        
+        # Count audio streams for proper indexing
+        target_audio_count = len(target_streams["audio_streams"])
+        source_audio_count = len(source_streams["audio_streams"])
+        
+        # Map target audio streams (non-default)
+        for i in range(target_audio_count):
+            mappings.extend(["-map", f"0:a:{i}"])
+        
+        # Map source audio streams (will be default)
+        for i in range(source_audio_count):
+            mappings.extend(["-map", f"1:a:{i}"])
+        
+        cmd.extend(mappings)
+        
+        # Map subtitles
+        if target_has_subs:
+            cmd.extend(["-map", "0:s?"])  # Target subtitles
+        
+        if source_has_subs and target_has_subs:
+            cmd.extend(["-map", "1:s?"])  # Source subtitles (both have)
+        elif source_has_subs and not target_has_subs:
+            cmd.extend(["-map", "1:s?"])  # Only source has subtitles
+        
+        # Video settings
+        cmd.extend([
+            "-c:v", "copy",      # Copy video
+        ])
+        
+        # Audio settings - AAC for compatibility
+        cmd.extend([
+            "-c:a", "aac",       # AAC codec
+            "-b:a", "192k",      # Bitrate
+            "-ar", "48000",      # Sample rate
+            "-ac", "2",          # Stereo
+        ])
+        
+        # KEY PART: Set audio dispositions
+        # First, clear all default dispositions
+        cmd.extend(["-disposition:a", "none"])
+        
+        # Then set ONLY the source audio streams as default
+        # Source audio streams start at index = target_audio_count
+        for i in range(source_audio_count):
+            cmd.extend([f"-disposition:a:{target_audio_count + i}", "default"])
+        
+        # Subtitle codec - copy all
+        cmd.extend(["-c:s", "copy"])
+        
+        # MX Player fixes
+        cmd.extend([
+            "-movflags", "+faststart",
+            "-max_interleave_delta", "0",
+        ])
+        
+        # Sync fixes
+        cmd.extend([
+            "-fflags", "+genpts",
+            "-avoid_negative_ts", "make_zero",
+        ])
+        
+        cmd.append(output_path)
+        
+        print(f"Merge command (with audio disposition): {' '.join(cmd)}")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"FFmpeg error: {result.stderr[:500]}")
+            return False
+            
+        return True
+        
+    except Exception as e:
+        print(f"MX fixed v2 error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def get_file_extension(file_path: str) -> str:
+    """Get file extension from path"""
+    return Path(file_path).suffix.lower()
+
+def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
+    """
+    Simple merge function - Uses v2 method with MX Player fixes
+    Makes source audio default, keeps target audio but not default
+    """
+    try:
+        print(f"\n=== Starting Simple Merge ===")
+        
+        # Get media info
+        target_info = get_media_info(target_path)
+        source_info = get_media_info(source_path)
+        
+        target_streams = extract_streams_info(target_info)
+        source_streams = extract_streams_info(source_info)
+        
+        print(f"Target audio streams: {len(target_streams['audio_streams'])}")
+        print(f"Source audio streams: {len(source_streams['audio_streams'])}")
+        
+        # Check if we have anything to add
+        if not source_streams["audio_streams"] and not source_streams["subtitle_streams"]:
+            print("No audio or subtitles to add from source")
+            return False
+        
+        # Always use v2 with MX Player fixes
+        print("Using v2 method with MX Player fixes...")
+        return merge_audio_subtitles_v2_mx_fixed(source_path, target_path, output_path)
+            
+    except Exception as e:
+        print(f"Error in simple merge: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
