@@ -13,11 +13,8 @@ else:
 import asyncio
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN
-import sequence  # This will register sequence handlers
-from handler_merging import setup_merging_handlers  # CHANGED: Import from handler_merging
-from start import setup_start_handlers
 
-# Create the main bot client
+# Create the main bot client (SINGLE INSTANCE)
 app = Client(
     "sequence_bot",
     api_id=API_ID,
@@ -29,13 +26,19 @@ app = Client(
 def main():
     """Initialize and run the bot with all features"""
     
+    # Import and setup all handlers
+    from start import setup_start_handlers
+    from sequence import setup_sequence_handlers
+    from handler_merging import setup_merging_handlers
+    
     # Setup all handlers
     setup_start_handlers(app)
-    setup_merging_handlers(app)  # Now this imports from handler_merging.py
+    setup_sequence_handlers(app)  # Changed from importing sequence.py
+    setup_merging_handlers(app)
     
     print("🤖 Bot starting with all features...")
     print("✅ Sequence mode loaded")
-    print("✅ Merging mode loaded (via handler_merging)")
+    print("✅ Merging mode loaded")
     print("✅ Start handlers loaded")
     
     app.run()
