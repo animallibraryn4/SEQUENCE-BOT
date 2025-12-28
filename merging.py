@@ -879,7 +879,7 @@ def get_merging_help_text() -> str:
 - Original target file tracks are preserved
 - Only new audio/subtitle tracks are added from source
 - No re-encoding (file size optimized)</blockquote>"""
-```
+
         
         if user_id in merging_users:
             del merging_users[user_id]
