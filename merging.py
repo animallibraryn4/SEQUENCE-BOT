@@ -480,19 +480,21 @@ def get_file_extension(file_path: str) -> str:
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Simple merge function - Uses v2 method with MX Player fixes only
+    Simple merge function - Uses v2 method with MX Player fixes
+    Makes source audio default, keeps target audio but not default
     """
     try:
         print(f"\n=== Starting Simple Merge ===")
         
-        # Get media info for subtitle check
+        # Get media info
         target_info = get_media_info(target_path)
         source_info = get_media_info(source_path)
         
         target_streams = extract_streams_info(target_info)
         source_streams = extract_streams_info(source_info)
         
-        print(f"Target subtitles: {len(target_streams['subtitle_streams'])}, Source subtitles: {len(source_streams['subtitle_streams'])}")
+        print(f"Target audio streams: {len(target_streams['audio_streams'])}")
+        print(f"Source audio streams: {len(source_streams['audio_streams'])}")
         
         # Check if we have anything to add
         if not source_streams["audio_streams"] and not source_streams["subtitle_streams"]:
@@ -507,8 +509,7 @@ def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path
         print(f"Error in simple merge: {e}")
         import traceback
         traceback.print_exc()
-        # Fallback to basic v2 method
-        return merge_audio_subtitles_v2(source_path, target_path, output_path)
+        return False
 
 # --- TELEGRAM BOT HANDLERS ---
 def setup_merging_handlers(app: Client):
