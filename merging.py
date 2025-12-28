@@ -216,10 +216,6 @@ def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_
             "-af", "aresample=async=1000",     # Aggressive sync for MX Player
         ])
         
-        # Set first audio stream as default during optimization
-        if len(source_streams["audio_streams"]) > 0:
-            cmd.extend(["-disposition:a:0", "default"])
-        
         # Add proper timestamp handling for MX Player
         cmd.extend([
             "-avoid_negative_ts", "make_zero",  # Fix negative timestamps
@@ -233,8 +229,9 @@ def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_
             if abs(source_duration - target_duration) > 0.1:  # If difference > 100ms
                 cmd.extend(["-t", str(target_duration)])
         
-        # Add metadata to identify as added audio
-        cmd.extend(["-metadata", "title=Added Audio (Auto-Selected)"])
+        # NO ADDITIONAL METADATA - Keep original audio track names
+        # Just copy metadata from source
+        cmd.extend(["-map_metadata", "0"])
         
         cmd.append(output_audio_path)
         
@@ -297,11 +294,11 @@ def merge_for_mx_player_compatibility(source_path: str, target_path: str, output
             # Always map target video first
             cmd.extend(["-map", "0:v"])              # Video from target
             
-            # Map target audio if exists (NOT as default)
+            # Map target audio if exists
             if target_streams_info["audio_streams"]:
                 cmd.extend(["-map", "0:a"])
             
-            # Map optimized audio (from source) - will be set as default
+            # Map optimized audio (from source)
             cmd.extend(["-map", "1:a"])             # Optimized audio
             
             # Map subtitles according to logic
@@ -326,32 +323,28 @@ def merge_for_mx_player_compatibility(source_path: str, target_path: str, output
                 "-start_at_zero",           # Start at zero
             ])
             
-            # Audio settings for MX Player - Set source audio as default
+            # Audio settings for MX Player
+            cmd.extend([
+                "-c:a", "copy",             # Copy all audio (already optimized)
+                "-af", "aresample=async=1000",  # Extra sync for MX Player
+            ])
+            
+            # Universal audio stream selection strategy
+            # Method 1: Set source audio as default (for most players)
             if target_streams_info["audio_streams"]:
-                # Both target and source have audio
-                target_audio_count = len(target_streams_info["audio_streams"])
-                
-                # Copy target audio codec (NOT default)
-                for i in range(target_audio_count):
-                    cmd.extend([f"-c:a:{i}", "copy"])
+                # Both have audio - disable target audio flags
+                for i in range(len(target_streams_info["audio_streams"])):
                     cmd.extend([f"-disposition:a:{i}", "0"])  # Not default
                 
-                # Set source audio as default (first source audio stream)
-                source_start_idx = target_audio_count
-                cmd.extend([f"-c:a:{source_start_idx}", "copy"])  # Already optimized
-                cmd.extend([f"-disposition:a:{source_start_idx}", "default"])  # AUTO SELECTED
-                
-                # Copy remaining source audio streams (not default)
-                for i in range(1, len(audio_streams_info["audio_streams"])):
-                    cmd.extend([f"-c:a:{source_start_idx + i}", "copy"])
-                    cmd.extend([f"-disposition:a:{source_start_idx + i}", "0"])
+                # Set first source audio as default
+                source_start_idx = len(target_streams_info["audio_streams"])
+                cmd.extend([f"-disposition:a:{source_start_idx}", "default"])
             else:
-                # Only source has audio - set as default
-                cmd.extend(["-c:a", "copy"])  # Already optimized
-                cmd.extend(["-disposition:a", "default"])  # AUTO SELECTED
+                # Only source has audio
+                cmd.extend(["-disposition:a", "default"])
             
-            # Audio filter for sync
-            cmd.extend(["-af", "aresample=async=1000"])
+            # Method 2: Cleanup
+            cmd.extend(["-sn", "-dn", "-ignore_unknown"])
             
             # Subtitle codec settings - copy all
             cmd.extend(["-c:s", "copy"])
@@ -364,11 +357,9 @@ def merge_for_mx_player_compatibility(source_path: str, target_path: str, output
                 "-max_interleave_delta", "1000000",  # Reduce buffer
             ])
             
-            # Metadata for MX Player - Mark source audio as preferred
+            # KEEP ORIGINAL METADATA - No additional names
             cmd.extend([
-                "-metadata", "handler_name=MX Player Compatible",
-                "-metadata:s:v", "title=Video Track",
-                "-metadata:s:a", "title=Added Audio (Auto-Selected)",
+                "-map_metadata", "0",        # Copy metadata from target
                 "-write_tmcd", "0",         # Don't write timecode
             ])
             
@@ -379,7 +370,7 @@ def merge_for_mx_player_compatibility(source_path: str, target_path: str, output
             result = subprocess.run(cmd, capture_output=True, text=True)
             
             if result.returncode == 0:
-                print("MX Player merge successful - Source audio auto-selected")
+                print("MX Player merge successful")
                 return True
             else:
                 print(f"MX Player merge failed: {result.stderr[:500]}")
@@ -412,10 +403,10 @@ def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output
             "-i", target_path,
             "-i", source_path,
             
-            # Stream mapping - always map target video
+            # Stream mapping - REORDER: Source audio first for universal compatibility
             "-map", "0:v:0",
-            "-map", "0:a?",              # Target audio
-            "-map", "1:a?",              # Source audio (will be auto-selected)
+            "-map", "1:a?",              # Source audio FIRST (more likely to be selected)
+            "-map", "0:a?",              # Target audio second
         ]
         
         # Handle subtitles based on logic
@@ -434,34 +425,21 @@ def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output
             "-copyts",
         ])
         
-        # MX Player audio fixes - Set source audio as default
-        if len(target_streams["audio_streams"]) > 0:
-            # Both target and source have audio
-            target_audio_count = len(target_streams["audio_streams"])
-            
-            # Target audio (not default)
-            cmd.extend(["-c:a", "aac"])
-            cmd.extend(["-b:a", "192k"])
-            cmd.extend(["-ar", "48000"])
-            cmd.extend(["-ac", "2"])
-            
-            # Set disposition for all audio streams
-            for i in range(target_audio_count):
-                cmd.extend([f"-disposition:a:{i}", "0"])  # Not default
-            
-            # Set first source audio stream as default
-            cmd.extend([f"-disposition:a:{target_audio_count}", "default"])  # AUTO SELECTED
-        else:
-            # Only source has audio - set as default
-            cmd.extend(["-c:a", "aac"])
-            cmd.extend(["-b:a", "192k"])
-            cmd.extend(["-ar", "48000"])
-            cmd.extend(["-ac", "2"])
-            cmd.extend(["-disposition:a", "default"])  # AUTO SELECTED
+        # MX Player audio fixes
+        cmd.extend([
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
+            "-ac", "2",
+            "-async", "1",
+            "-af", "aresample=async=1000",
+        ])
         
-        # Audio sync
-        cmd.extend(["-async", "1"])
-        cmd.extend(["-af", "aresample=async=1000"])
+        # Universal audio selection: Set source audio as default
+        cmd.extend(["-disposition:a:0", "default"])  # First audio (source) is default
+        if len(target_streams["audio_streams"]) > 0:
+            # Target audio exists, disable its default flag
+            cmd.extend(["-disposition:a:1", "0"])
         
         # Subtitle codec - copy all
         cmd.extend(["-c:s", "copy"])
@@ -472,15 +450,12 @@ def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output
             "-max_interleave_delta", "0",
         ])
         
-        # Sync fixes
+        # Sync fixes - KEEP ORIGINAL METADATA
         cmd.extend([
             "-fflags", "+genpts",
             "-avoid_negative_ts", "make_zero",
-            "-map_metadata", "0",
+            "-map_metadata", "0",  # Copy metadata from target (keep original names)
         ])
-        
-        # Metadata to indicate auto-selected audio
-        cmd.extend(["-metadata:s:a", "title=Added Audio (Auto-Selected)"])
         
         cmd.append(output_path)
         
@@ -502,7 +477,6 @@ def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path
     try:
         print(f"\n=== Starting MX Player Compatible Merge ===")
         
-        # Get media info for subtitle check
         # Get media info for subtitle check
         target_info = get_media_info(target_path)
         source_info = get_media_info(source_path)
@@ -956,14 +930,9 @@ def get_merging_help_text() -> str:
 5. Send <code>/done</code> again
 6. Wait for processing to complete</blockquote>
 
-<blockquote><b>✨ New Feature:</b>
-- Source audio is now <b>auto-selected by default</b> in all video players
-- No need to manually switch audio tracks after merging
-- Works with VLC, MX Player, Windows Media Player, etc.</blockquote>
-
 <blockquote><b>⚠️ Important Notes:</b>
 - Files are matched by season and episode numbers
 - MKV format works best for merging
 - Original target file tracks are preserved
 - Source audio tracks are set as default
-- No re-encoding (file size optimized)</blockquote>"""
+- Original audio names are kept intact</blockquote>"""
