@@ -1264,4 +1264,4 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
 - MKV format works best for merging
 - Original target file tracks are preserved
 - Only new audio/subtitle tracks are added from source
-      - No re-encoding (file size optimized)</blockquote>"""
+    - No re-encoding (file size optimized)</blockquote>"""
