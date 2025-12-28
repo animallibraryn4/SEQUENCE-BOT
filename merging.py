@@ -367,10 +367,11 @@ def merge_for_mx_player_compatibility(source_path: str, target_path: str, output
 
 def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Improved v2 method with MX Player fixes and proper subtitle handling
+    Improved v2 method with MX Player fixes and proper audio disposition
+    Makes source audio default, target audio non-default
     """
     try:
-        # Get media info to check subtitles
+        # Get media info
         target_info = get_media_info(target_path)
         source_info = get_media_info(source_path)
         
@@ -383,18 +384,33 @@ def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output
         print(f"V2 Subtitle Info: Target subs: {len(target_streams['subtitle_streams'])}, "
               f"Source subs: {len(source_streams['subtitle_streams'])}")
         
+        # Build the ffmpeg command
         cmd = [
             "ffmpeg", "-y",
-            "-i", target_path,
-            "-i", source_path,
-            
-            # Stream mapping - always map target video
-            "-map", "0:v:0",
-            "-map", "0:a?",              # Target audio
-            "-map", "1:a?",              # Source audio
+            "-i", target_path,  # Input 0: Target file
+            "-i", source_path,  # Input 1: Source file
         ]
         
-        # Handle subtitles based on logic
+        # Map streams in order
+        mappings = [
+            "-map", "0:v:0",    # Target video (first video stream)
+        ]
+        
+        # Count audio streams for proper indexing
+        target_audio_count = len(target_streams["audio_streams"])
+        source_audio_count = len(source_streams["audio_streams"])
+        
+        # Map target audio streams (non-default)
+        for i in range(target_audio_count):
+            mappings.extend(["-map", f"0:a:{i}"])
+        
+        # Map source audio streams (will be default)
+        for i in range(source_audio_count):
+            mappings.extend(["-map", f"1:a:{i}"])
+        
+        cmd.extend(mappings)
+        
+        # Map subtitles
         if target_has_subs:
             cmd.extend(["-map", "0:s?"])  # Target subtitles
         
@@ -403,27 +419,32 @@ def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output
         elif source_has_subs and not target_has_subs:
             cmd.extend(["-map", "1:s?"])  # Only source has subtitles
         
-        # MX Player video fixes
+        # Video settings
         cmd.extend([
-            "-c:v", "copy",
-            "-vsync", "cfr",
-            "-copyts",
+            "-c:v", "copy",      # Copy video
         ])
         
-        # MX Player audio fixes
+        # Audio settings - AAC for compatibility
         cmd.extend([
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-ar", "48000",
-            "-ac", "2",
-            "-async", "1",
-            "-af", "aresample=async=1000",
+            "-c:a", "aac",       # AAC codec
+            "-b:a", "192k",      # Bitrate
+            "-ar", "48000",      # Sample rate
+            "-ac", "2",          # Stereo
         ])
+        
+        # KEY PART: Set audio dispositions
+        # First, clear all default dispositions
+        cmd.extend(["-disposition:a", "none"])
+        
+        # Then set ONLY the source audio streams as default
+        # Source audio streams start at index = target_audio_count
+        for i in range(source_audio_count):
+            cmd.extend([f"-disposition:a:{target_audio_count + i}", "default"])
         
         # Subtitle codec - copy all
         cmd.extend(["-c:s", "copy"])
         
-        # MX Player container fixes
+        # MX Player fixes
         cmd.extend([
             "-movflags", "+faststart",
             "-max_interleave_delta", "0",
@@ -433,17 +454,24 @@ def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output
         cmd.extend([
             "-fflags", "+genpts",
             "-avoid_negative_ts", "make_zero",
-            "-disposition:a:0", "default",
-            "-map_metadata", "0",
         ])
         
         cmd.append(output_path)
         
+        print(f"Merge command (with audio disposition): {' '.join(cmd)}")
+        
         result = subprocess.run(cmd, capture_output=True, text=True)
-        return result.returncode == 0
+        
+        if result.returncode != 0:
+            print(f"FFmpeg error: {result.stderr[:500]}")
+            return False
+            
+        return True
         
     except Exception as e:
         print(f"MX fixed v2 error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def get_file_extension(file_path: str) -> str:
