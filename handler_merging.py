@@ -1,6 +1,3 @@
-
-
-
 import asyncio
 import tempfile
 import time
@@ -372,7 +369,6 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
               
     except asyncio.CancelledError:
         # Handle cancellation
-        # Handle cancellation
         print(f"Merging cancelled for user {user_id}")
         await progress_msg.edit_text(  
             "<blockquote><b>❌ Processing Cancelled</b></blockquote>\n\n"  
@@ -405,24 +401,25 @@ def setup_merging_handlers(app: Client):
     """Setup all merging-related handlers"""
 
     @app.on_callback_query(filters.regex(r"^cancel_processing_(\d+)$"))
-    async def cancel_processing_callback(client, query):
+    async def handle_cancel_processing(client, query):
+        """Handle cancel processing button callback"""
         user_id = int(query.data.split("_")[2])
-
-        # Security: user sirf apna hi process cancel kar sakta hai
+        
         if user_id != query.from_user.id:
-            await query.answer("Not allowed", show_alert=True)
+            await query.answer("You can only cancel your own processing!", show_alert=True)
             return
-
-        # 🔔 Sirf CANCEL SIGNAL bhejo
+        
+        # Set cancellation flag
         if user_id in PROCESSING_STATES:
             PROCESSING_STATES[user_id]["cancelled"] = True
-
+        
+        # Cancel the task if it exists
         task = MERGE_TASKS.get(user_id)
         if task and not task.done():
             task.cancel()
-
-        # ✅ Instant feedback (VERY IMPORTANT)
-        await query.answer("⏹️ Cancelling…", show_alert=False)    
+        
+        # Answer the callback query immediately
+        await query.answer("⏹️ Processing cancelled", show_alert=False)
     
     @app.on_message(filters.command("merging"))
     async def merging_command(client: Client, message: Message):
@@ -436,6 +433,7 @@ def setup_merging_handlers(app: Client):
         if user_id in merging_users:
             await cleanup_merging_session(
                 user_id,
+                message,
                 reason="new session started"
             )
         
@@ -474,7 +472,8 @@ def setup_merging_handlers(app: Client):
             reason="cancel button"
         )
         
-        await query.answer("Merge cancelled")
+        await query.answer("Merge cancelled", show_alert=False)
+        await query.message.delete()
     
     @app.on_message(filters.document | filters.video)
     async def handle_merging_files(client: Client, message: Message):
@@ -582,7 +581,7 @@ def setup_merging_handlers(app: Client):
                     f"<blockquote>You can continue anyway, but only matching episodes will be processed.</blockquote>",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("✅ Continue Anyway", callback_data="continue_merge")],
-                        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_merge")]
+                        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_merge_cmd")]
                     ])
                 )
                 return
@@ -595,7 +594,7 @@ def setup_merging_handlers(app: Client):
                 "<blockquote>❌ Invalid state. Use <code>/cancel_merge</code> to reset.</blockquote>"
             )
     
-    @app.on_callback_query(filters.regex(r"^(continue_merge|cancel_merge)$"))
+    @app.on_callback_query(filters.regex(r"^(continue_merge)$"))
     async def merge_control_callback(client, query):
         """Handle merge control callbacks"""
         user_id = query.from_user.id
@@ -608,16 +607,9 @@ def setup_merging_handlers(app: Client):
         state = merging_users[user_id]
         
         if action == "continue_merge":
+            await query.answer("Continuing with merge...", show_alert=False)
             await query.message.delete()
             await start_merging_process(client, state, query.message)
-            
-        elif action == "cancel_merge":
-            await cleanup_merging_session(
-                user_id,
-                query.message,
-                reason="cancel callback"
-            )
-            await query.answer("Merge cancelled")
     
     @app.on_message(filters.command("cancel_merge"))
     async def cancel_merge_command(client: Client, message: Message):
@@ -636,31 +628,13 @@ def setup_merging_handlers(app: Client):
         # 🔥 REAL CANCELLATION - Uses central cleanup function
         await cleanup_merging_session(
             user_id,
+            message,
             reason="cancel command"
         )
         
         await message.reply_text(
             "<blockquote><b>❌ Merge process cancelled and cleaned up.</b></blockquote>"
         )
-    
-    # Add cancel processing callback handler
-    @app.on_callback_query(filters.regex(r"^cancel_processing_(\d+)$"))
-    async def cancel_processing_callback(client, query):
-        """Handle cancel processing button callback"""
-        user_id = int(query.data.split("_")[2])
-        
-        if user_id != query.from_user.id:
-            await query.answer("You can only cancel your own processing!", show_alert=True)
-            return
-        
-        # 🔥 REAL CANCELLATION - Uses central cleanup function
-        await cleanup_merging_session(
-            user_id,
-            query.message,
-            reason="cancel button"
-        )
-        
-        await query.answer("⏹️ Processing cancelled", show_alert=True)
 
 # Export the setup function
 __all__ = ['setup_merging_handlers']
