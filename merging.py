@@ -13,6 +13,16 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from config import OWNER_ID
 from start import is_subscribed
 
+
+class MergingState:
+    def __init__(self, user_id):
+        self.user_id = user_id
+        self.source_files = []
+        self.target_files = []
+        self.state = "waiting_for_source"  # 🔴 ADD THIS LINE
+        self.total_files = 0
+        self.progress_msg = None
+        self.start_time = None
 # =============================================
 # GLOBAL STATE MANAGEMENT (MULTI-USER SAFE)
 # =============================================
