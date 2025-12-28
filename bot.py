@@ -15,7 +15,7 @@ import merging
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN
 import sequence  # This will register sequence handlers
-from merging import setup_merging_handlers
+from handler_merging import setup_merging_handlers  # CHANGED: Import from handler_merging
 from start import setup_start_handlers
 
 # Create the main bot client
@@ -32,24 +32,14 @@ def main():
     
     # Setup all handlers
     setup_start_handlers(app)
-    setup_merging_handlers(app)
+    setup_merging_handlers(app)  # Now this imports from handler_merging.py
     
     print("🤖 Bot starting with all features...")
     print("✅ Sequence mode loaded")
-    print("✅ Merging mode loaded")
+    print("✅ Merging mode loaded (via handler_merging)")
     print("✅ Start handlers loaded")
     
     app.run()
 
 if __name__ == "__main__":
     main()
-
-
-
-  # Changed from 'from merging import setup_merging_handlers'
-
-
-    # setup_start_handlers(app) 
-    # If merging.py handles its own registration upon import, 
-    # you can comment out the setup_merging_handlers(app) line.
-    
