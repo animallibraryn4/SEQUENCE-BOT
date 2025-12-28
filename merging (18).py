@@ -262,128 +262,88 @@ def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_
         print(f"Audio optimization error: {e}")
         return False
 
-
 def merge_for_mx_player_compatibility(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Merge files with MX Player compatibility fixes and proper subtitle handling
+    FINAL FIXED VERSION
+    - Works in VLC and MX Player
+    - No silent audio
+    - Seek safe
+    - Size optimized
     """
     try:
-        # Create temp directory for processed audio
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            
-            # Step 1: Optimize audio for MX Player
+
+            # 1️⃣ Optimize audio ONCE
             optimized_audio = str(temp_path / "mx_optimized_audio.m4a")
-            
             if not analyze_and_optimize_audio(source_path, target_path, optimized_audio):
-                print("Failed to optimize audio for MX Player")
+                print("Failed to optimize audio")
                 return False
-            
-            # Step 2: Get media info for both files
+
+            # 2️⃣ Read stream info
             target_info = get_media_info(target_path)
             source_info = get_media_info(source_path)
-            
-            target_streams_info = extract_streams_info(target_info)
-            source_streams_info = extract_streams_info(source_info)
-            
-            audio_info = get_media_info(optimized_audio)
-            audio_streams_info = extract_streams_info(audio_info)
-            
-            # Step 3: Check subtitle requirements
-            target_has_subs = len(target_streams_info["subtitle_streams"]) > 0
-            source_has_subs = len(source_streams_info["subtitle_streams"]) > 0
-            
-            print(f"Subtitle Info: Target has {len(target_streams_info['subtitle_streams'])} subs, "
-                  f"Source has {len(source_streams_info['subtitle_streams'])} subs")
-            
-            # Step 4: Prepare merge command with MX Player fixes
+
+            target_streams = extract_streams_info(target_info)
+            source_streams = extract_streams_info(source_info)
+
+            target_has_subs = len(target_streams["subtitle_streams"]) > 0
+            source_has_subs = len(source_streams["subtitle_streams"]) > 0
+
+            # 3️⃣ Build FFmpeg command (SAFE MUX ONLY)
             cmd = [
                 "ffmpeg", "-y",
-                "-i", target_path,          # Target file
-                "-i", optimized_audio,      # Optimized audio
-                "-strict", "-2",            # Allow experimental codecs
+                "-i", target_path,      # input 0: target video
+                "-i", optimized_audio,  # input 1: optimized audio
             ]
-            
-            # Add source file if it has subtitles and target doesn't
+
+            # add source file ONLY if subtitles are needed
             if source_has_subs and not target_has_subs:
-                cmd.insert(3, source_path)
-                cmd.insert(3, "-i")
-            
-            # MX Player requires proper stream ordering
-            # Always map target video first
-            cmd.extend(["-map", "0:v"])              # Video from target
-            
-            # Map target audio if exists
-            if target_streams_info["audio_streams"]:
-                cmd.extend(["-map", "0:a"])
-            
-            # Map optimized audio (from source)
-            cmd.extend(["-map", "1:a"])             # Optimized audio
-            
-            # Map subtitles according to logic
+                cmd.extend(["-i", source_path])  # input 2
+
+            # 4️⃣ Stream mapping (VERY IMPORTANT)
+            cmd.extend([
+                "-map", "0:v:0",    # target video
+                "-map", "1:a:0",    # optimized audio (ONLY)
+            ])
+
+            # subtitles
             if target_has_subs:
-                # Target has subtitles - always keep them
                 cmd.extend(["-map", "0:s"])
-            
-            if source_has_subs and target_has_subs:
-                # Both have subtitles - add source subtitles
-                if not source_path in cmd:
-                    cmd.extend(["-i", source_path])
+            if source_has_subs and not target_has_subs:
                 cmd.extend(["-map", "2:s"])
-            elif source_has_subs and not target_has_subs:
-                # Only source has subtitles
-                cmd.extend(["-map", "2:s"])
-            
-            # Video settings for MX Player
+
+            # 5️⃣ CODECS — NO TIMESTAMP MODIFICATION
             cmd.extend([
-                "-c:v", "copy",             # Copy video
-                "-vsync", "cfr",            # Constant frame rate (better for MX)
-                "-copyts",                  # Copy timestamps
-                "-start_at_zero",           # Start at zero
+                "-c:v", "copy",
+                "-c:a", "copy",
+                "-c:s", "copy",
             ])
-            
-            # Audio settings for MX Player
+
+            # 6️⃣ Container (SAFE)
             cmd.extend([
-                "-c:a", "copy",             # Copy all audio (already optimized)
-                "-disposition:a", "default",  # Set default audio
-                "-af", "aresample=async=1000",  # Extra sync for MX Player
+                "-movflags", "+faststart",
+                "-map_metadata", "0",
+                "-write_tmcd", "0",
+                "-f", "mp4" if output_path.endswith(".mp4") else "matroska",
             ])
-            
-            # Subtitle codec settings - copy all
-            cmd.extend(["-c:s", "copy"])
-            
-            # MX Player container optimizations
-            cmd.extend([
-                "-movflags", "+faststart",  # Quick start for streaming
-                "-f", "mp4" if output_path.endswith('.mp4') else "matroska",
-                "-fflags", "+genpts+igndts",  # Generate PTS, ignore DTS
-                "-max_interleave_delta", "1000000",  # Reduce buffer
-            ])
-            
-            # Metadata for MX Player
-            cmd.extend([
-                "-metadata", "handler_name=MX Player Compatible",
-                "-metadata:s:v", "title=Video Track",
-                "-metadata:s:a", "title=Audio Track",
-                "-write_tmcd", "0",         # Don't write timecode
-            ])
-            
+
             cmd.append(output_path)
-            
-            print(f"MX Player merge command: {' '.join(cmd)}")
-            
+
+            print("FINAL SAFE MERGE CMD:")
+            print(" ".join(cmd))
+
             result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                print("MX Player merge successful")
-                return True
-            else:
-                print(f"MX Player merge failed: {result.stderr[:500]}")
+            if result.returncode != 0:
+                print("FFmpeg error:", result.stderr[:500])
                 return False
-            
+
+            return True
+
     except Exception as e:
-        print(f"MX Player merge error: {e}")
+        print("Merge error:", e)
         return False
+
 
 def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output_path: str) -> bool:
     """
