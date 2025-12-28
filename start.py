@@ -1,6 +1,3 @@
-
-
-
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -94,8 +91,6 @@ async def safe_edit(message, text, reply_markup=None):
 def setup_start_handlers(app):
     """Register all start and related handlers"""
 
-__all__ = ['setup_start_handlers', 'is_subscribed', 'set_bot_start_time']
-    
     @app.on_message(filters.command("start"))
     async def start_command(client, message):
         if not await is_subscribed(client, message):
