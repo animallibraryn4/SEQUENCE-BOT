@@ -164,7 +164,7 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
 
 def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_path: str) -> bool:
     """
-    Analyze source audio and optimize it for MX Player compatibility
+    Analyze source audio and optimize it for MX Player compatibility with SIZE OPTIMIZATION
     """
     try:
         # Get detailed info about both files
@@ -185,15 +185,28 @@ def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_
             print("No video stream found in target file")
             return False
         
-        # Get target video properties for MX Player compatibility
+        # Get target video properties
         target_fps = eval(target_video_stream.get("avg_frame_rate", "24000/1001"))
         target_duration = float(target_info.get("format", {}).get("duration", 0))
         
-        # Get video timebase for sync
-        if "time_base" in target_video_stream:
-            time_base = target_video_stream["time_base"]
+        # Calculate optimal bitrate based on target file size
+        target_size_bytes = os.path.getsize(target_path)
+        target_size_mb = target_size_bytes / (1024 * 1024)
+        
+        # Smart bitrate calculation for optimal size/quality balance
+        # For a 125MB file, we want minimal size increase
+        if target_size_mb < 100:
+            optimal_bitrate = 64    # Very small files
+        elif target_size_mb < 150:  # Your case: 125MB falls here
+            optimal_bitrate = 96    # Good balance for ~125MB files
+        elif target_size_mb < 250:
+            optimal_bitrate = 128   # Standard for medium files
+        elif target_size_mb < 500:
+            optimal_bitrate = 160   # Good for larger files
         else:
-            time_base = "1/1000"
+            optimal_bitrate = 192   # For very large files only
+        
+        print(f"Target file: {target_size_mb:.2f}MB → Using audio bitrate: {optimal_bitrate}k")
         
         # Prepare audio optimization command for MX Player
         cmd = [
@@ -206,15 +219,19 @@ def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_
         for i in range(len(source_streams["audio_streams"])):
             cmd.extend(["-map", f"0:a:{i}"])
         
-        # MX Player specific audio optimization
+        # OPTIMIZED AUDIO SETTINGS FOR SMALLER SIZE
         cmd.extend([
-            "-c:a", "aac",                     # AAC is best for MX Player
-            "-b:a", "192k",                    # Optimal bitrate
-            "-ar", "48000",                    # Must be 48kHz for MX Player
-            "-ac", "2",                        # Stereo (MX Player prefers this)
+            "-c:a", "aac",                     # AAC is most efficient
+            "-b:a", f"{optimal_bitrate}k",     # OPTIMIZED BITRATE
+            "-ar", "44100",                    # 44.1kHz instead of 48kHz (saves space)
+            "-ac", "2",                        # Keep stereo
             "-async", "1",                     # Force audio resampling for sync
             "-af", "aresample=async=1000",     # Aggressive sync for MX Player
         ])
+        
+        # Optional: For even smaller size, use variable bitrate
+        if optimal_bitrate <= 96:
+            cmd.extend(["-vbr", "3"])  # Enable VBR for better quality at low bitrates
         
         # Add proper timestamp handling for MX Player
         cmd.extend([
@@ -229,16 +246,29 @@ def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_
             if abs(source_duration - target_duration) > 0.1:  # If difference > 100ms
                 cmd.extend(["-t", str(target_duration)])
         
+        # Set first audio as default (for auto-selection)
+        if len(source_streams["audio_streams"]) > 0:
+            cmd.extend(["-disposition:a:0", "default"])
+        
         cmd.append(output_audio_path)
         
-        print(f"MX Player Audio optimization command: {' '.join(cmd)}")
+        print(f"Size-optimized Audio command: {' '.join(cmd)}")
         
         result = subprocess.run(cmd, capture_output=True, text=True)
-        return result.returncode == 0
+        if result.returncode == 0:
+            # Check optimized audio size
+            if os.path.exists(output_audio_path):
+                audio_size_mb = os.path.getsize(output_audio_path) / (1024 * 1024)
+                print(f"Optimized audio size: {audio_size_mb:.2f}MB")
+            return True
+        else:
+            print(f"Audio optimization failed: {result.stderr[:200]}")
+            return False
         
     except Exception as e:
         print(f"Audio optimization error: {e}")
         return False
+
 
 def merge_for_mx_player_compatibility(source_path: str, target_path: str, output_path: str) -> bool:
     """
