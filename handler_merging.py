@@ -113,14 +113,18 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                         ])
                     )  
                       
+                    # FIXED: Use a proper async callback function
+                    async def source_progress(current, total):
+                        await smart_progress_callback(
+                            current, total, progress_msg, start_time,
+                            f"⬇️ Source ({overall_progress})", 
+                            source_data["filename"], user_id, msg_id
+                        )
+                    
                     source_file = await client.download_media(  
                         source_data["message"],  
                         file_name=str(temp_path / source_filename),  
-                        progress=lambda c, t: asyncio.create_task(
-                            smart_progress_callback(c, t, progress_msg, start_time, 
-                                                   f"⬇️ Source ({overall_progress})", 
-                                                   source_data["filename"], user_id, msg_id)
-                        )  
+                        progress=source_progress
                     )  
                       
                     if not source_file:  
@@ -152,14 +156,18 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                         ])
                     )  
                       
+                    # FIXED: Use a proper async callback function
+                    async def target_progress(current, total):
+                        await smart_progress_callback(
+                            current, total, progress_msg, start_time,
+                            f"⬇️ Target ({overall_progress})", 
+                            target_data["filename"], user_id, msg_id
+                        )
+                    
                     target_file = await client.download_media(  
                         target_data["message"],  
                         file_name=str(temp_path / target_filename),  
-                        progress=lambda c, t: asyncio.create_task(
-                            smart_progress_callback(c, t, progress_msg, start_time, 
-                                                   f"⬇️ Target ({overall_progress})", 
-                                                   target_data["filename"], user_id, msg_id)
-                        )  
+                        progress=target_progress
                     )  
                       
                     if not target_file:  
@@ -287,6 +295,14 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                             ])
                         )  
                           
+                        # FIXED: Use a proper async callback function for upload
+                        async def upload_progress(current, total):
+                            await smart_progress_callback(
+                                current, total, progress_msg, start_time,
+                                f"⬆️ Upload ({overall_progress})", 
+                                output_filename, user_id, msg_id
+                            )
+                          
                         await client.send_document(  
                             chat_id=user_id,  
                             document=output_file,  
@@ -296,11 +312,7 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                                 f"<blockquote>🎵 Audio tracks added from source</blockquote>\n"  
                                 f"<blockquote>📝 Subtitle tracks added from source</blockquote>"  
                             ),  
-                            progress=lambda c, t: asyncio.create_task(
-                                smart_progress_callback(c, t, progress_msg, start_time, 
-                                                       f"⬆️ Upload ({overall_progress})", 
-                                                       output_filename, user_id, msg_id)
-                            )  
+                            progress=upload_progress
                         )  
                           
                         # --- FINAL STATUS FOR THIS FILE ---  
@@ -607,3 +619,6 @@ def setup_merging_handlers(app: Client):
             await query.answer("⏹️ Processing will be cancelled...", show_alert=True)
         else:
             await query.answer("No active processing to cancel", show_alert=True)
+
+# Export the setup function
+__all__ = ['setup_merging_handlers']
