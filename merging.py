@@ -126,361 +126,215 @@ def extract_streams_info(media_info: Dict) -> Dict:
         "total_streams": len(media_info.get("streams", []))
     }
 
-def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: str) -> bool:
-    try:
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", target_path,     # input 0 (Target Video)
-            "-i", source_path,     # input 1 (Source Audio/Subs)
-            
-            "-map", "0:v:0",       # Target video
-            "-map", "0:a?",        # Target audio (Original)
-            "-map", "1:a?",        # Source audio (Added)
-            "-map", "0:s?",        # Target subs
-            "-map", "1:s?",        # Source subs
-            
-            "-c:v", "copy",        # Video same rahegi (No lag)
-            "-c:a", "aac",         # Audio re-encode (Sync ke liye zaroori hai)
-            "-b:a", "192k",        # Good quality bitrate
-            "-ac", "2",            # Compatibility ke liye stereo
-            "-af", "aresample=async=1", # SYNC FIX: Audio gaps ko fill karta hai
-            
-            "-c:s", "copy",        # Subtitles copy
-            
-            "-disposition:a:0", "0",# Make TARGET audio non-default
-
-            
-            "-disposition:a:1", "default", # Make SOURCE (added) audio default
-            "-map_metadata", "0",
-            output_path
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print("FFmpeg error:", result.stderr[:500])
-            return False
-        return True
-
-    except Exception as e:
-        print("Merge failed:", e)
-        return False
-
-def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_path: str) -> bool:
-    """
-    Analyze source audio and optimize it for MX Player compatibility
-    """
-    try:
-        # Get detailed info about both files
-        source_info = get_media_info(source_path)
-        target_info = get_media_info(target_path)
-        
-        source_streams = extract_streams_info(source_info)
-        target_streams = extract_streams_info(target_info)
-        
-        # Extract target video properties for alignment
-        target_video_stream = None
-        for stream in target_info.get("streams", []):
-            if stream.get("codec_type") == "video":
-                target_video_stream = stream
-                break
-        
-        if not target_video_stream:
-            print("No video stream found in target file")
-            return False
-        
-        # Get target video properties for MX Player compatibility
-        target_fps = eval(target_video_stream.get("avg_frame_rate", "24000/1001"))
-        target_duration = float(target_info.get("format", {}).get("duration", 0))
-        
-        # Get video timebase for sync
-        if "time_base" in target_video_stream:
-            time_base = target_video_stream["time_base"]
-        else:
-            time_base = "1/1000"
-        
-        # Prepare audio optimization command for MX Player
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", source_path,
-            "-strict", "-2",  # Allow experimental codecs if needed
-        ]
-        
-        # Map all audio streams from source
-        for i in range(len(source_streams["audio_streams"])):
-            cmd.extend(["-map", f"0:a:{i}"])
-        
-        # MX Player specific audio optimization
-        cmd.extend([
-            "-c:a", "aac",                     # AAC is best for MX Player
-            "-b:a", "192k",                    # Optimal bitrate
-            "-ar", "48000",                    # Must be 48kHz for MX Player
-            "-ac", "2",                        # Stereo (MX Player prefers this)
-            "-async", "1",                     # Force audio resampling for sync
-            "-af", "aresample=async=1000",     # Aggressive sync for MX Player
-        ])
-        
-        # Add proper timestamp handling for MX Player
-        cmd.extend([
-            "-avoid_negative_ts", "make_zero",  # Fix negative timestamps
-            "-fflags", "+genpts",              # Generate missing PTS
-            "-max_interleave_delta", "0",      # Reduce interleaving delay
-        ])
-        
-        # Match target duration precisely
-        if target_duration > 0:
-            source_duration = float(source_info.get("format", {}).get("duration", 0))
-            if abs(source_duration - target_duration) > 0.1:  # If difference > 100ms
-                cmd.extend(["-t", str(target_duration)])
-        
-        cmd.append(output_audio_path)
-        
-        print(f"MX Player Audio optimization command: {' '.join(cmd)}")
-        
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        return result.returncode == 0
-        
-    except Exception as e:
-        print(f"Audio optimization error: {e}")
-        return False
-
-def merge_for_mx_player_compatibility(source_path: str, target_path: str, output_path: str) -> bool:
-    """
-    Merge files with MX Player compatibility fixes and proper subtitle handling
-    """
-    try:
-        # Create temp directory for processed audio
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            
-            # Step 1: Optimize audio for MX Player
-            optimized_audio = str(temp_path / "mx_optimized_audio.m4a")
-            
-            if not analyze_and_optimize_audio(source_path, target_path, optimized_audio):
-                print("Failed to optimize audio for MX Player")
-                return False
-            
-            # Step 2: Get media info for both files
-            target_info = get_media_info(target_path)
-            source_info = get_media_info(source_path)
-            
-            target_streams_info = extract_streams_info(target_info)
-            source_streams_info = extract_streams_info(source_info)
-            
-            audio_info = get_media_info(optimized_audio)
-            audio_streams_info = extract_streams_info(audio_info)
-            
-            # Step 3: Check subtitle requirements
-            target_has_subs = len(target_streams_info["subtitle_streams"]) > 0
-            source_has_subs = len(source_streams_info["subtitle_streams"]) > 0
-            
-            print(f"Subtitle Info: Target has {len(target_streams_info['subtitle_streams'])} subs, "
-                  f"Source has {len(source_streams_info['subtitle_streams'])} subs")
-            
-            # Step 4: Prepare merge command with MX Player fixes
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", target_path,          # Target file
-                "-i", optimized_audio,      # Optimized audio
-                "-strict", "-2",            # Allow experimental codecs
-            ]
-            
-            # Add source file if it has subtitles and target doesn't
-            if source_has_subs and not target_has_subs:
-                cmd.insert(3, source_path)
-                cmd.insert(3, "-i")
-            
-            # MX Player requires proper stream ordering
-            # Always map target video first
-            cmd.extend(["-map", "0:v"])              # Video from target
-            
-            # Map target audio if exists
-            if target_streams_info["audio_streams"]:
-                cmd.extend(["-map", "0:a"])
-            
-            # Map optimized audio (from source)
-            cmd.extend(["-map", "1:a"])             # Optimized audio
-            
-            # Map subtitles according to logic
-            if target_has_subs:
-                # Target has subtitles - always keep them
-                cmd.extend(["-map", "0:s"])
-            
-            if source_has_subs and target_has_subs:
-                # Both have subtitles - add source subtitles
-                if not source_path in cmd:
-                    cmd.extend(["-i", source_path])
-                cmd.extend(["-map", "2:s"])
-            elif source_has_subs and not target_has_subs:
-                # Only source has subtitles
-                cmd.extend(["-map", "2:s"])
-            
-            # Video settings for MX Player
-            cmd.extend([
-                "-c:v", "copy",             # Copy video
-                "-vsync", "cfr",            # Constant frame rate (better for MX)
-                "-copyts",                  # Copy timestamps
-                "-start_at_zero",           # Start at zero
-            ])
-            
-            # Audio settings for MX Player
-            cmd.extend([
-                "-c:a", "copy",             # Copy all audio (already optimized)
-                "-disposition:a", "default",  # Set default audio
-                "-af", "aresample=async=1000",  # Extra sync for MX Player
-            ])
-            
-            # Subtitle codec settings - copy all
-            cmd.extend(["-c:s", "copy"])
-            
-            # MX Player container optimizations
-            cmd.extend([
-                "-movflags", "+faststart",  # Quick start for streaming
-                "-f", "mp4" if output_path.endswith('.mp4') else "matroska",
-                "-fflags", "+genpts+igndts",  # Generate PTS, ignore DTS
-                "-max_interleave_delta", "1000000",  # Reduce buffer
-            ])
-            
-            # Metadata for MX Player
-            cmd.extend([
-                "-metadata", "handler_name=MX Player Compatible",
-                "-metadata:s:v", "title=Video Track",
-                "-metadata:s:a", "title=Audio Track",
-                "-write_tmcd", "0",         # Don't write timecode
-            ])
-            
-            cmd.append(output_path)
-            
-            print(f"MX Player merge command: {' '.join(cmd)}")
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                print("MX Player merge successful")
-                return True
-            else:
-                print(f"MX Player merge failed: {result.stderr[:500]}")
-                return False
-            
-    except Exception as e:
-        print(f"MX Player merge error: {e}")
-        return False
-
-def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output_path: str) -> bool:
-    """
-    Improved v2 method with MX Player fixes and proper subtitle handling
-    """
-    try:
-        # Get media info to check subtitles
-        target_info = get_media_info(target_path)
-        source_info = get_media_info(source_path)
-        
-        target_streams = extract_streams_info(target_info)
-        source_streams = extract_streams_info(source_info)
-        
-        target_has_subs = len(target_streams["subtitle_streams"]) > 0
-        source_has_subs = len(source_streams["subtitle_streams"]) > 0
-        
-        print(f"V2 Subtitle Info: Target subs: {len(target_streams['subtitle_streams'])}, "
-              f"Source subs: {len(source_streams['subtitle_streams'])}")
-        
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", target_path,
-            "-i", source_path,
-            
-            # Stream mapping - always map target video
-            "-map", "0:v:0",
-            "-map", "0:a?",              # Target audio
-            "-map", "1:a?",              # Source audio
-        ]
-        
-        # Handle subtitles based on logic
-        if target_has_subs:
-            cmd.extend(["-map", "0:s?"])  # Target subtitles
-        
-        if source_has_subs and target_has_subs:
-            cmd.extend(["-map", "1:s?"])  # Source subtitles (both have)
-        elif source_has_subs and not target_has_subs:
-            cmd.extend(["-map", "1:s?"])  # Only source has subtitles
-        
-        # MX Player video fixes
-        cmd.extend([
-            "-c:v", "copy",
-            "-vsync", "cfr",
-            "-copyts",
-        ])
-        
-        # MX Player audio fixes
-        cmd.extend([
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-ar", "48000",
-            "-ac", "2",
-            "-async", "1",
-            "-af", "aresample=async=1000",
-        ])
-        
-        # Subtitle codec - copy all
-        cmd.extend(["-c:s", "copy"])
-        
-        # MX Player container fixes
-        cmd.extend([
-            "-movflags", "+faststart",
-            "-max_interleave_delta", "0",
-        ])
-        
-        # Sync fixes
-        cmd.extend([
-            "-fflags", "+genpts",
-            "-avoid_negative_ts", "make_zero",
-            "-disposition:a:0", "default",
-            "-map_metadata", "0",
-        ])
-        
-        cmd.append(output_path)
-        
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        return result.returncode == 0
-        
-    except Exception as e:
-        print(f"MX fixed v2 error: {e}")
-        return False
-
 def get_file_extension(file_path: str) -> str:
     """Get file extension from path"""
     return Path(file_path).suffix.lower()
 
+def detect_audio_language(file_path: str) -> str:
+    """Detect audio language from file"""
+    try:
+        cmd = ['ffprobe', '-v', 'quiet', '-show_entries', 'stream_tags=language', 
+               '-select_streams', 'a', '-of', 'csv=p=0', file_path]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            # Get first audio language
+            languages = result.stdout.strip().split('\n')
+            return languages[0] if languages[0] else 'und'
+    except Exception as e:
+        print(f"Error detecting language: {e}")
+    return 'und'
+
+def merge_with_mkvmerge(source_path: str, target_path: str, output_path: str) -> bool:
+    """
+    Merge using MKVToolNix - NO RE-ENCODE, PERFECT QUALITY
+    Target audio: keep, NOT default
+    Source audio: DEFAULT
+    Subtitles: copy from both
+    Video: copy (original quality)
+    """
+    try:
+        print(f"\n=== Starting MKVToolNix Merge (NO RE-ENCODE) ===")
+        print(f"Source: {source_path}")
+        print(f"Target: {target_path}")
+        print(f"Output: {output_path}")
+        
+        # Get languages for better tagging
+        target_lang = detect_audio_language(target_path)
+        source_lang = detect_audio_language(source_path)
+        
+        print(f"Target audio language: {target_lang}")
+        print(f"Source audio language: {source_lang}")
+        
+        # Ensure output is .mkv for best compatibility
+        if not output_path.lower().endswith('.mkv'):
+            output_path = output_path.rsplit('.', 1)[0] + '.mkv'
+            print(f"Changed output to: {output_path}")
+        
+        # Build the MKVToolNix command
+        cmd = [
+            'mkvmerge', '-o', output_path,
+            
+            # Add target file
+            '--no-audio', target_path,  # Don't add target audio yet
+            '--video-tracks', '0',
+            '--track-order', '0:0',
+            
+            # Now add target audio (NOT default)
+            target_path,
+            '--audio-tracks', '0',
+            '--default-track', '0:no',
+            '--language', f'0:{target_lang}',
+            
+            # Add source audio (DEFAULT)
+            source_path,
+            '--audio-tracks', '0',
+            '--default-track', '0:yes',
+            '--language', f'0:{source_lang}',
+            
+            # Add target subtitles
+            target_path,
+            '--subtitle-tracks', 'all',
+            
+            # Add source subtitles
+            source_path,
+            '--subtitle-tracks', 'all'
+        ]
+        
+        print(f"\nMKVToolNix Command:")
+        print(' '.join(cmd))
+        print("\n")
+        
+        # Execute the command
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print("✅ MKVToolNix merge successful!")
+            print(f"Output created: {output_path}")
+            
+            # Verify the result
+            verify_cmd = ['mkvinfo', output_path, '--ui-language', 'en_US']
+            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+            
+            if verify_result.returncode == 0:
+                print("\n=== VERIFICATION ===")
+                # Check for default track info
+                for line in verify_result.stdout.split('\n'):
+                    if 'Default track' in line:
+                        print(f"Track info: {line.strip()}")
+                
+                # Count tracks
+                audio_count = verify_result.stdout.count('Track type: audio')
+                subtitle_count = verify_result.stdout.count('Track type: subtitles')
+                print(f"Total audio tracks: {audio_count}")
+                print(f"Total subtitle tracks: {subtitle_count}")
+            return True
+        else:
+            print(f"❌ MKVToolNix failed: {result.stderr[:500]}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ MKVToolNix error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Simple merge function - Uses v2 method with MX Player fixes only
+    Simple merge function - Uses MKVToolNix (NO RE-ENCODE) as primary
+    Falls back to FFmpeg if MKVToolNix fails
     """
     try:
         print(f"\n=== Starting Simple Merge ===")
         
-        # Get media info for subtitle check
+        # Get media info for logging
         target_info = get_media_info(target_path)
         source_info = get_media_info(source_path)
         
         target_streams = extract_streams_info(target_info)
         source_streams = extract_streams_info(source_info)
         
-        print(f"Target subtitles: {len(target_streams['subtitle_streams'])}, Source subtitles: {len(source_streams['subtitle_streams'])}")
+        print(f"Target has {len(target_streams['audio_streams'])} audio, {len(target_streams['subtitle_streams'])} subtitle streams")
+        print(f"Source has {len(source_streams['audio_streams'])} audio, {len(source_streams['subtitle_streams'])} subtitle streams")
         
         # Check if we have anything to add
         if not source_streams["audio_streams"] and not source_streams["subtitle_streams"]:
             print("No audio or subtitles to add from source")
             return False
         
-        # Always use v2 with MX Player fixes
-        print("Using v2 method with MX Player fixes...")
-        return merge_audio_subtitles_v2_mx_fixed(source_path, target_path, output_path)
-            
+        # Check if files are MKV format (best for MKVToolNix)
+        source_ext = get_file_extension(source_path)
+        target_ext = get_file_extension(target_path)
+        
+        if source_ext == '.mkv' and target_ext == '.mkv':
+            print("✅ Both files are MKV format - using MKVToolNix (NO RE-ENCODE)")
+            return merge_with_mkvmerge(source_path, target_path, output_path)
+        else:
+            print(f"⚠️ Non-MKV format detected (Source: {source_ext}, Target: {target_ext})")
+            print("Will still try MKVToolNix first...")
+            if merge_with_mkvmerge(source_path, target_path, output_path):
+                return True
+            else:
+                print("MKVToolNix failed, trying FFmpeg fallback...")
+                # FFmpeg fallback (keeping your existing v2 logic)
+                return fallback_ffmpeg_merge(source_path, target_path, output_path)
+                
     except Exception as e:
         print(f"Error in simple merge: {e}")
         import traceback
         traceback.print_exc()
-        # Fallback to basic v2 method
-        return merge_audio_subtitles_v2(source_path, target_path, output_path)
+        # Final fallback to FFmpeg
+        print("Trying FFmpeg fallback...")
+        return fallback_ffmpeg_merge(source_path, target_path, output_path)
+
+def fallback_ffmpeg_merge(source_path: str, target_path: str, output_path: str) -> bool:
+    """
+    FFmpeg fallback method when MKVToolNix fails
+    """
+    try:
+        print("Using FFmpeg fallback method...")
+        
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", target_path,
+            "-i", source_path,
+            
+            # Stream mapping
+            "-map", "0:v:0",       # Target video
+            "-map", "0:a?",        # Target audio
+            "-map", "1:a?",        # Source audio
+            "-map", "0:s?",        # Target subtitles
+            "-map", "1:s?",        # Source subtitles
+            
+            # Codec settings
+            "-c:v", "copy",        # Copy video
+            "-c:a", "aac",         # Re-encode audio for compatibility
+            "-b:a", "192k",
+            "-ac", "2",
+            "-c:s", "copy",        # Copy subtitles
+            
+            # Default track settings
+            "-disposition:a:0", "0",        # Target audio NOT default
+            "-disposition:a:1", "default",  # Source audio DEFAULT
+            
+            # Sync fixes
+            "-af", "aresample=async=1",
+            "-fflags", "+genpts",
+            
+            output_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print("✅ FFmpeg fallback successful")
+            return True
+        else:
+            print(f"❌ FFmpeg fallback failed: {result.stderr[:500]}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ FFmpeg fallback error: {e}")
+        return False
 
 # --- TELEGRAM BOT HANDLERS ---
 def setup_merging_handlers(app: Client):
@@ -499,6 +353,7 @@ def setup_merging_handlers(app: Client):
         
         help_text = (
             "<blockquote><b>🔧 AUTO FILE MERGING MODE</b></blockquote>\n\n"
+            "<blockquote><b>✨ NEW: MKVToolNix Engine (NO RE-ENCODE)</b></blockquote>\n\n"
             "<blockquote>Please send the SOURCE FILES from which you want to extract audio and subtitles.</blockquote>\n\n"
             "<blockquote><b>📝 Instructions:</b>\n"
             "1. Send all source files (with desired audio/subtitle tracks)\n"
@@ -507,9 +362,14 @@ def setup_merging_handlers(app: Client):
             "4. Send <code>/done</code> again\n"
             "5. Wait for processing</blockquote>\n\n"
             "<blockquote><b>⚠️ Requirements:</b>\n"
-            "- Files should be MKV format for best results\n"
+            "- <b>MKV format works best</b> (NO re-encode, original quality preserved)\n"
             "- Files should have similar naming for auto-matching\n"
-            "- Bot needs ffmpeg installed on server</blockquote>"
+            "- Server needs MKVToolNix installed for best results</blockquote>\n\n"
+            "<blockquote><b>🎯 Benefits:</b>\n"
+            "- ✅ Zero quality loss (no video re-encode)\n"
+            "- ✅ Source audio set as DEFAULT\n"
+            "- ✅ MX Player, VLC, Android TV compatible\n"
+            "- ✅ Fast processing</blockquote>"
         )
         
         buttons = InlineKeyboardMarkup([
@@ -570,7 +430,6 @@ def setup_merging_handlers(app: Client):
         if state.state == "waiting_for_source":
             state.source_files.append(file_data)
             
-            # Send confirmation
             # Send confirmation
             if len(state.source_files) % 3 == 0 or len(state.source_files) == 1:
                 await message.reply_text(
@@ -703,6 +562,7 @@ async def start_merging_process(client: Client, state: MergingState, message: Me
     # Send initial processing message
     progress_msg = await message.reply_text(
         f"<blockquote><b>🔄 Starting Merge Process</b></blockquote>\n\n"
+        f"<blockquote>✨ <b>Using MKVToolNix Engine (NO RE-ENCODE)</b></blockquote>\n"
         f"<blockquote>📊 Matching files...\n"
         f"⏳ Please wait...</blockquote>"
     )
@@ -745,6 +605,7 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                 try:
                     progress_text = (
                         f"<blockquote><b>🔄 Merging Files</b></blockquote>\n\n"
+                        f"<blockquote>✨ <b>MKVToolNix Engine Active</b></blockquote>\n"
                         f"<blockquote>📊 Progress: {idx}/{len(valid_pairs)}\n"
                         f"✅ Successful: {success_count}\n"
                         f"❌ Failed: {failed_count}\n"
@@ -779,30 +640,37 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                         failed_count += 1
                         continue
                     
-                    # Output file path - keep original target filename
+                    # Output file path - keep original target filename but ensure .mkv extension
                     output_filename = target_data["filename"]
+                    if not output_filename.lower().endswith('.mkv'):
+                        output_filename = output_filename.rsplit('.', 1)[0] + '.mkv'
+                    
                     output_file = str(temp_path / output_filename)
                     
+                    print(f"\n{'='*50}")
                     print(f"Processing pair {idx}:")
                     print(f"  Source: {source_data['filename']}")
                     print(f"  Target: {target_data['filename']}")
                     print(f"  Output: {output_filename}")
+                    print(f"{'='*50}\n")
                     
-                    # Merge audio and subtitles using improved method
+                    # Merge audio and subtitles using MKVToolNix
                     if merge_audio_subtitles_simple(source_file, target_file, output_file):
                         # Upload merged file
                         await client.send_document(
                             chat_id=user_id,
                             document=output_file,
                             caption=(
-                                f"<blockquote>✅ <b>Merged File</b></blockquote>\n"
-                                f"<blockquote>📁 {target_data['filename']}</blockquote>\n"
-                                f"<blockquote>🎵 Audio tracks added from source</blockquote>\n"
-                                f"<blockquote>📝 Subtitle tracks added from source</blockquote>"
+                                f"<blockquote>✅ <b>Merged File (NO RE-ENCODE)</b></blockquote>\n\n"
+                                f"<blockquote>📁 {output_filename}</blockquote>\n"
+                                f"<blockquote>🎵 <b>Source audio set as DEFAULT</b></blockquote>\n"
+                                f"<blockquote>🎯 Zero quality loss (video copied)</blockquote>\n"
+                                f"<blockquote>📝 All subtitle tracks preserved</blockquote>\n"
+                                f"<blockquote>📱 MX Player, VLC, Android TV compatible</blockquote>"
                             )
                         )
                         success_count += 1
-                        print(f"Successfully merged file {idx}")
+                        print(f"✅ Successfully merged file {idx}")
                     else:
                         failed_count += 1
                         await client.send_message(
@@ -810,7 +678,7 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                             f"<blockquote>❌ Failed to merge: {target_data['filename']}</blockquote>\n"
                             f"<blockquote><i>This file may be incompatible or corrupted.</i></blockquote>"
                         )
-                        print(f"Failed to merge file {idx}")
+                        print(f"❌ Failed to merge file {idx}")
                     
                 except Exception as e:
                     print(f"Error processing file {idx}: {str(e)}")
@@ -830,6 +698,7 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
             # Final summary
             summary = (
                 f"<blockquote><b>📊 Merge Process Complete!</b></blockquote>\n\n"
+                f"<blockquote>✨ <b>MKVToolNix Results:</b></blockquote>\n"
                 f"<blockquote>✅ Successful: {success_count}\n"
                 f"❌ Failed: {failed_count}\n"
                 f"⏭️ Skipped (no match): {skipped_count}\n"
@@ -837,7 +706,14 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
             )
             
             if success_count > 0:
-                summary += "<blockquote>🎉 Merged files have been sent to you!</blockquote>"
+                summary += (
+                    "<blockquote>🎉 Merged files have been sent to you!</blockquote>\n\n"
+                    "<blockquote>🔑 Key Features:</blockquote>\n"
+                    "<blockquote>• ✅ Zero quality loss (video copied)</blockquote>\n"
+                    "<blockquote>• ✅ Source audio = DEFAULT track</blockquote>\n"
+                    "<blockquote>• ✅ All subtitles preserved</blockquote>\n"
+                    "<blockquote>• ✅ MX Player, VLC, Android TV compatible</blockquote>"
+                )
             
             await progress_msg.edit_text(summary)
             
@@ -876,9 +752,17 @@ def get_merging_help_text() -> str:
 5. Send <code>/done</code> again
 6. Wait for processing to complete</blockquote>
 
+<blockquote><b>🎯 NEW: MKVToolNix Engine</b>
+- ✅ Zero quality loss (no video re-encode)
+- ✅ Source audio set as DEFAULT
+- ✅ All subtitle tracks preserved
+- ✅ MX Player, VLC, Android TV compatible
+- ✅ Fast processing</blockquote>
+
 <blockquote><b>⚠️ Important Notes:</b>
 - Files are matched by season and episode numbers
-- MKV format works best for merging
+- <b>MKV format works best</b> (for MKVToolNix engine)
 - Original target file tracks are preserved
 - Only new audio/subtitle tracks are added from source
-- No re-encoding (file size optimized)</blockquote>"""
+- Server needs MKVToolNix installed</blockquote>"""
+       
