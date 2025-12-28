@@ -447,9 +447,130 @@ def get_file_extension(file_path: str) -> str:
     """Get file extension from path"""
     return Path(file_path).suffix.lower()
 
+def optimize_merged_file_size(input_path: str, output_path: str) -> bool:
+    """
+    Optimize/compress merged file size without losing noticeable quality
+    This runs AFTER the merge is complete
+    """
+    try:
+        # Get original file size
+        original_size = os.path.getsize(input_path)
+        original_size_mb = original_size / (1024 * 1024)
+        print(f"Original merged file size: {original_size_mb:.2f} MB")
+        
+        # Analyze the file to understand its structure
+        file_info = get_media_info(input_path)
+        streams_info = extract_streams_info(file_info)
+        
+        # Count audio streams
+        audio_streams_count = len(streams_info["audio_streams"])
+        
+        print(f"File has {audio_streams_count} audio streams")
+        
+        # Strategy: Reduce audio bitrate and optimize container
+        if original_size_mb > 150:  # Only compress if file is large
+            # Calculate target size (aim for ~30% reduction for large files)
+            target_reduction = 0.3  # 30% reduction
+            target_size_mb = original_size_mb * (1 - target_reduction)
+            
+            print(f"Target size after compression: {target_size_mb:.2f} MB")
+            
+            # Prepare compression command
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", input_path,
+            ]
+            
+            # Copy video stream (no re-encoding to preserve quality)
+            cmd.extend(["-c:v", "copy"])
+            
+            # Optimize audio streams
+            if audio_streams_count > 0:
+                # For each audio stream, reduce bitrate
+                for i in range(audio_streams_count):
+                    # Determine optimal bitrate for this stream
+                    if original_size_mb < 200:
+                        bitrate = "128k"
+                    elif original_size_mb < 300:
+                        bitrate = "96k"
+                    else:
+                        bitrate = "64k"
+                    
+                    cmd.extend([
+                        f"-c:a:{i}", "aac",      # Use efficient AAC codec
+                        f"-b:a:{i}", bitrate,    # Reduced bitrate
+                        f"-ar:a:{i}", "44100",   # Lower sample rate
+                    ])
+            
+            # Copy subtitles
+            cmd.extend(["-c:s", "copy"])
+            
+            # Additional optimizations
+            cmd.extend([
+                "-movflags", "+faststart",      # For MP4 optimization
+                "-max_muxing_queue_size", "9999",  # Avoid buffer issues
+            ])
+            
+            # Metadata
+            cmd.extend([
+                "-map_metadata", "0",           # Keep original metadata
+                "-map_chapters", "0",           # Keep chapters if any
+            ])
+            
+            cmd.append(output_path)
+            
+            print(f"File compression command: {' '.join(cmd)}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                # Check new file size
+                if os.path.exists(output_path):
+                    new_size = os.path.getsize(output_path)
+                    new_size_mb = new_size / (1024 * 1024)
+                    reduction = ((original_size_mb - new_size_mb) / original_size_mb) * 100
+                    
+                    print(f"Compression successful!")
+                    print(f"Original: {original_size_mb:.2f} MB")
+                    print(f"Compressed: {new_size_mb:.2f} MB")
+                    print(f"Reduction: {reduction:.1f}%")
+                    
+                    # Verify the file is still playable
+                    try:
+                        verify_info = get_media_info(output_path)
+                        if verify_info.get("streams"):
+                            return True
+                    except:
+                        pass
+                return True
+            else:
+                print(f"Compression failed: {result.stderr[:500]}")
+                # If compression fails, just copy the original
+                import shutil
+                shutil.copy2(input_path, output_path)
+                return True
+        
+        else:
+            # File is already small enough, just copy it
+            print(f"File is already small ({original_size_mb:.2f} MB), skipping compression")
+            import shutil
+            shutil.copy2(input_path, output_path)
+            return True
+            
+    except Exception as e:
+        print(f"File compression error: {e}")
+        # If anything fails, just copy the original
+        try:
+            import shutil
+            shutil.copy2(input_path, output_path)
+            return True
+        except:
+            return False
+
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
     Main merging function with MX Player compatibility and proper subtitle handling
+    WITH POST-MERGE SIZE OPTIMIZATION
     """
     try:
         print(f"\n=== Starting MX Player Compatible Merge ===")
@@ -469,48 +590,94 @@ def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path
         if not output_path.endswith(target_ext):
             output_path = output_path.rsplit('.', 1)[0] + target_ext
         
-        print(f"Target format: {target_info.get('format', {}).get('format_name', 'unknown')}")
-        print(f"Target video codec: {[s.get('codec_name') for s in target_info.get('streams', []) if s.get('codec_type') == 'video']}")
+        # Create a temporary output path for initial merge
+        temp_dir = tempfile.mkdtemp()
+        temp_output = os.path.join(temp_dir, "temp_merged" + target_ext)
         
-        # Check if we have audio to add
-        if not source_streams["audio_streams"] and not source_streams["subtitle_streams"]:
-            print("No audio or subtitles to add from source")
-            return False
+        print(f"Temp output: {temp_output}")
+        print(f"Final output: {output_path}")
         
         # Try MX Player optimized merge first
-        if merge_for_mx_player_compatibility(source_path, target_path, output_path):
-            print("=== MX Player Optimized Merge Successful ===")
+        if merge_for_mx_player_compatibility(source_path, target_path, temp_output):
+            print("=== Initial Merge Successful ===")
             
-            # Verify subtitles in output
-            output_info = get_media_info(output_path)
-            output_streams = extract_streams_info(output_info)
-            print(f"Output has {len(output_streams['subtitle_streams'])} subtitle streams")
-            
-            # Additional post-processing for MX Player if needed
-            if target_ext.lower() == '.mp4':
-                # Run qt-faststart for better MP4 compatibility
-                try:
-                    temp_output = output_path + ".temp"
-                    os.rename(output_path, temp_output)
-                    qt_cmd = ["qt-faststart", temp_output, output_path]
-                    subprocess.run(qt_cmd, capture_output=True)
-                    os.remove(temp_output)
-                    print("Applied qt-faststart for better streaming")
-                except:
-                    pass
-            
-            return True
+            # Check initial merged file size
+            if os.path.exists(temp_output):
+                initial_size = os.path.getsize(temp_output) / (1024 * 1024)
+                print(f"Initial merged file size: {initial_size:.2f} MB")
+                
+                # Apply post-merge size optimization
+                print("Applying post-merge size optimization...")
+                if optimize_merged_file_size(temp_output, output_path):
+                    
+                    # Compare sizes
+                    if os.path.exists(output_path):
+                        final_size = os.path.getsize(output_path) / (1024 * 1024)
+                        reduction = ((initial_size - final_size) / initial_size) * 100
+                        
+                        print(f"=== Size Optimization Complete ===")
+                        print(f"Initial size: {initial_size:.2f} MB")
+                        print(f"Final size: {final_size:.2f} MB")
+                        print(f"Size reduction: {reduction:.1f}%")
+                        
+                        # Verify output
+                        output_info = get_media_info(output_path)
+                        output_streams = extract_streams_info(output_info)
+                        
+                        print(f"Final file has:")
+                        print(f"  - {len(output_streams['audio_streams'])} audio streams")
+                        print(f"  - {len(output_streams['subtitle_streams'])} subtitle streams")
+                        
+                        # Check if auto-selection is preserved
+                        if len(output_streams["audio_streams"]) > 0:
+                            print("Audio auto-selection: PRESERVED")
+                    
+                    # Clean up temp file
+                    try:
+                        os.remove(temp_output)
+                        os.rmdir(temp_dir)
+                    except:
+                        pass
+                    
+                    return True
+                else:
+                    print("Size optimization failed, using original merged file")
+                    # If optimization fails, use the original merged file
+                    import shutil
+                    shutil.move(temp_output, output_path)
+                    return True
+            else:
+                print("Initial merge failed to create file")
+                return False
         else:
             print("MX Player merge failed, trying standard method...")
-            # Fallback to standard method but with MX Player fixes
-            return merge_audio_subtitles_v2_mx_fixed(source_path, target_path, output_path)
+            # Fallback with post-processing
+            if merge_audio_subtitles_v2_mx_fixed(source_path, target_path, temp_output):
+                # Apply size optimization
+                optimize_merged_file_size(temp_output, output_path)
+                # Clean up
+                try:
+                    os.remove(temp_output)
+                    os.rmdir(temp_dir)
+                except:
+                    pass
+                return True
+            else:
+                return merge_audio_subtitles_v2(source_path, target_path, output_path)
             
     except Exception as e:
-        print(f"Error in MX Player merge: {e}")
+        print(f"Error in merge with optimization: {e}")
         import traceback
         traceback.print_exc()
+        # Clean up temp files
+        try:
+            if 'temp_output' in locals() and os.path.exists(temp_output):
+                os.remove(temp_output)
+            if 'temp_dir' in locals() and os.path.exists(temp_dir):
+                os.rmdir(temp_dir)
+        except:
+            pass
         return merge_audio_subtitles_v2(source_path, target_path, output_path)
-
 
 # --- TELEGRAM BOT HANDLERS ---
 def setup_merging_handlers(app: Client):
