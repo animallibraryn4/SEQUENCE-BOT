@@ -403,6 +403,26 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
 
 def setup_merging_handlers(app: Client):
     """Setup all merging-related handlers"""
+
+    @app.on_callback_query(filters.regex(r"^cancel_processing_(\d+)$"))
+    async def cancel_processing_callback(client, query):
+        user_id = int(query.data.split("_")[2])
+
+        # Security: user sirf apna hi process cancel kar sakta hai
+        if user_id != query.from_user.id:
+            await query.answer("Not allowed", show_alert=True)
+            return
+
+        # 🔔 Sirf CANCEL SIGNAL bhejo
+        if user_id in PROCESSING_STATES:
+            PROCESSING_STATES[user_id]["cancelled"] = True
+
+        task = MERGE_TASKS.get(user_id)
+        if task and not task.done():
+            task.cancel()
+
+        # ✅ Instant feedback (VERY IMPORTANT)
+        await query.answer("⏹️ Cancelling…", show_alert=False)    
     
     @app.on_message(filters.command("merging"))
     async def merging_command(client: Client, message: Message):
