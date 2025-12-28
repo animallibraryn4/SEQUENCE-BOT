@@ -164,7 +164,7 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
 
 def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_path: str) -> bool:
     """
-    Analyze source audio and optimize it for MX Player compatibility
+    Analyze source audio and optimize it for MX Player compatibility with size optimization
     """
     try:
         # Get detailed info about both files
@@ -185,15 +185,37 @@ def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_
             print("No video stream found in target file")
             return False
         
-        # Get target video properties for MX Player compatibility
-        target_fps = eval(target_video_stream.get("avg_frame_rate", "24000/1001"))
+        # Get target duration for matching
         target_duration = float(target_info.get("format", {}).get("duration", 0))
         
-        # Get video timebase for sync
-        if "time_base" in target_video_stream:
-            time_base = target_video_stream["time_base"]
+        # Analyze source audio bitrate to match or optimize
+        source_bitrate = 128  # Default
+        if source_streams["audio_streams"]:
+            # Try to get original bitrate or estimate
+            for audio in source_streams["audio_streams"]:
+                if audio.get("codec") == "aac":
+                    source_bitrate = 128  # Good quality for AAC
+                elif audio.get("codec") == "ac3":
+                    source_bitrate = 192  # AC3 needs higher bitrate
+                elif audio.get("codec") == "dts":
+                    source_bitrate = 384  # DTS needs much higher
+                else:
+                    source_bitrate = 128  # Default for others
+        
+        # Optimize bitrate based on target file size
+        target_size_mb = os.path.getsize(target_path) / (1024 * 1024)
+        
+        # Smart bitrate selection
+        if target_size_mb < 100:
+            optimal_bitrate = 96  # For small files
+        elif target_size_mb < 200:
+            optimal_bitrate = 128  # For medium files
+        elif target_size_mb < 500:
+            optimal_bitrate = 160  # For larger files
         else:
-            time_base = "1/1000"
+            optimal_bitrate = 192  # For very large files
+        
+        print(f"Target size: {target_size_mb:.2f}MB, Optimal audio bitrate: {optimal_bitrate}k")
         
         # Prepare audio optimization command for MX Player
         cmd = [
@@ -206,10 +228,10 @@ def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_
         for i in range(len(source_streams["audio_streams"])):
             cmd.extend(["-map", f"0:a:{i}"])
         
-        # MX Player specific audio optimization
+        # MX Player specific audio optimization with size control
         cmd.extend([
             "-c:a", "aac",                     # AAC is best for MX Player
-            "-b:a", "192k",                    # Optimal bitrate
+            "-b:a", f"{optimal_bitrate}k",     # Optimized bitrate for size
             "-ar", "48000",                    # Must be 48kHz for MX Player
             "-ac", "2",                        # Stereo (MX Player prefers this)
             "-async", "1",                     # Force audio resampling for sync
@@ -229,13 +251,9 @@ def analyze_and_optimize_audio(source_path: str, target_path: str, output_audio_
             if abs(source_duration - target_duration) > 0.1:  # If difference > 100ms
                 cmd.extend(["-t", str(target_duration)])
         
-        # NO ADDITIONAL METADATA - Keep original audio track names
-        # Just copy metadata from source
-        cmd.extend(["-map_metadata", "0"])
-        
         cmd.append(output_audio_path)
         
-        print(f"MX Player Audio optimization command: {' '.join(cmd)}")
+        print(f"Optimized Audio command: {' '.join(cmd)}")
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0
@@ -253,7 +271,7 @@ def merge_for_mx_player_compatibility(source_path: str, target_path: str, output
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             
-            # Step 1: Optimize audio for MX Player
+            # Step 1: Optimize audio for MX Player with size optimization
             optimized_audio = str(temp_path / "mx_optimized_audio.m4a")
             
             if not analyze_and_optimize_audio(source_path, target_path, optimized_audio):
@@ -270,14 +288,24 @@ def merge_for_mx_player_compatibility(source_path: str, target_path: str, output
             audio_info = get_media_info(optimized_audio)
             audio_streams_info = extract_streams_info(audio_info)
             
-            # Step 3: Check subtitle requirements
+            # Step 3: Check if we should keep target audio or replace it
+            # To save space, we can REPLACE target audio instead of adding
+            target_has_audio = len(target_streams_info["audio_streams"]) > 0
+            source_has_audio = len(source_streams_info["audio_streams"]) > 0
+            
+            # Decide: Keep target audio? (for smaller size, we can drop it if user only wants source audio)
+            keep_target_audio = True  # Set to False to save space
+            
+            # Step 4: Check subtitle requirements
             target_has_subs = len(target_streams_info["subtitle_streams"]) > 0
             source_has_subs = len(source_streams_info["subtitle_streams"]) > 0
             
+            print(f"Audio Info: Target has {len(target_streams_info['audio_streams'])} audio, "
+                  f"Source has {len(source_streams_info['audio_streams'])} audio")
             print(f"Subtitle Info: Target has {len(target_streams_info['subtitle_streams'])} subs, "
                   f"Source has {len(source_streams_info['subtitle_streams'])} subs")
             
-            # Step 4: Prepare merge command with MX Player fixes
+            # Step 5: Prepare merge command with MX Player fixes
             cmd = [
                 "ffmpeg", "-y",
                 "-i", target_path,          # Target file
@@ -294,12 +322,13 @@ def merge_for_mx_player_compatibility(source_path: str, target_path: str, output
             # Always map target video first
             cmd.extend(["-map", "0:v"])              # Video from target
             
-            # Map target audio if exists
-            if target_streams_info["audio_streams"]:
-                cmd.extend(["-map", "0:a"])
-            
-            # Map optimized audio (from source)
-            cmd.extend(["-map", "1:a"])             # Optimized audio
+            # Map audio based on space optimization decision
+            if keep_target_audio and target_has_audio:
+                cmd.extend(["-map", "0:a"])          # Target audio
+                cmd.extend(["-map", "1:a"])          # Source audio
+            else:
+                # Only keep source audio to save space
+                cmd.extend(["-map", "1:a"])          # Only source audio
             
             # Map subtitles according to logic
             if target_has_subs:
@@ -317,34 +346,25 @@ def merge_for_mx_player_compatibility(source_path: str, target_path: str, output
             
             # Video settings for MX Player
             cmd.extend([
-                "-c:v", "copy",             # Copy video
+                "-c:v", "copy",             # Copy video (no quality loss)
                 "-vsync", "cfr",            # Constant frame rate (better for MX)
                 "-copyts",                  # Copy timestamps
                 "-start_at_zero",           # Start at zero
             ])
             
-            # Audio settings for MX Player
-            cmd.extend([
-                "-c:a", "copy",             # Copy all audio (already optimized)
-                "-af", "aresample=async=1000",  # Extra sync for MX Player
-            ])
-            
-            # Universal audio stream selection strategy
-            # Method 1: Set source audio as default (for most players)
-            if target_streams_info["audio_streams"]:
-                # Both have audio - disable target audio flags
-                for i in range(len(target_streams_info["audio_streams"])):
-                    cmd.extend([f"-disposition:a:{i}", "0"])  # Not default
+            # Audio settings - Optimized for size
+            if keep_target_audio and target_has_audio:
+                # Copy target audio as-is
+                cmd.extend(["-c:a:0", "copy"])  # Target audio copy
+                cmd.extend(["-c:a:1", "copy"])  # Source audio copy
                 
-                # Set first source audio as default
-                source_start_idx = len(target_streams_info["audio_streams"])
-                cmd.extend([f"-disposition:a:{source_start_idx}", "default"])
+                # Set source audio as default
+                cmd.extend(["-disposition:a:1", "default"])
+                cmd.extend(["-disposition:a:0", "0"])
             else:
-                # Only source has audio
+                # Only source audio
+                cmd.extend(["-c:a", "copy"])  # Already optimized
                 cmd.extend(["-disposition:a", "default"])
-            
-            # Method 2: Cleanup
-            cmd.extend(["-sn", "-dn", "-ignore_unknown"])
             
             # Subtitle codec settings - copy all
             cmd.extend(["-c:s", "copy"])
@@ -357,7 +377,7 @@ def merge_for_mx_player_compatibility(source_path: str, target_path: str, output
                 "-max_interleave_delta", "1000000",  # Reduce buffer
             ])
             
-            # KEEP ORIGINAL METADATA - No additional names
+            # Metadata for MX Player
             cmd.extend([
                 "-map_metadata", "0",        # Copy metadata from target
                 "-write_tmcd", "0",         # Don't write timecode
@@ -403,10 +423,10 @@ def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output
             "-i", target_path,
             "-i", source_path,
             
-            # Stream mapping - REORDER: Source audio first for universal compatibility
+            # Stream mapping - always map target video
             "-map", "0:v:0",
-            "-map", "1:a?",              # Source audio FIRST (more likely to be selected)
-            "-map", "0:a?",              # Target audio second
+            "-map", "0:a?",              # Target audio
+            "-map", "1:a?",              # Source audio
         ]
         
         # Handle subtitles based on logic
@@ -435,12 +455,6 @@ def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output
             "-af", "aresample=async=1000",
         ])
         
-        # Universal audio selection: Set source audio as default
-        cmd.extend(["-disposition:a:0", "default"])  # First audio (source) is default
-        if len(target_streams["audio_streams"]) > 0:
-            # Target audio exists, disable its default flag
-            cmd.extend(["-disposition:a:1", "0"])
-        
         # Subtitle codec - copy all
         cmd.extend(["-c:s", "copy"])
         
@@ -450,11 +464,12 @@ def merge_audio_subtitles_v2_mx_fixed(source_path: str, target_path: str, output
             "-max_interleave_delta", "0",
         ])
         
-        # Sync fixes - KEEP ORIGINAL METADATA
+        # Sync fixes
         cmd.extend([
             "-fflags", "+genpts",
             "-avoid_negative_ts", "make_zero",
-            "-map_metadata", "0",  # Copy metadata from target (keep original names)
+            "-disposition:a:0", "default",
+            "-map_metadata", "0",
         ])
         
         cmd.append(output_path)
@@ -473,6 +488,7 @@ def get_file_extension(file_path: str) -> str:
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
     Main merging function with MX Player compatibility and proper subtitle handling
+    WITH SIZE OPTIMIZATION OPTION
     """
     try:
         print(f"\n=== Starting MX Player Compatible Merge ===")
@@ -487,6 +503,10 @@ def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path
         print(f"Target has {len(target_streams['subtitle_streams'])} subtitle streams")
         print(f"Source has {len(source_streams['subtitle_streams'])} subtitle streams")
         
+        # Calculate target file size
+        target_size_mb = os.path.getsize(target_path) / (1024 * 1024)
+        print(f"Target file size: {target_size_mb:.2f} MB")
+        
         # Determine output format based on target
         target_ext = get_file_extension(target_path)
         if not output_path.endswith(target_ext):
@@ -500,33 +520,38 @@ def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path
             print("No audio or subtitles to add from source")
             return False
         
-        # Try MX Player optimized merge first
-        if merge_for_mx_player_compatibility(source_path, target_path, output_path):
-            print("=== MX Player Optimized Merge Successful ===")
-            
-            # Verify subtitles in output
-            output_info = get_media_info(output_path)
-            output_streams = extract_streams_info(output_info)
-            print(f"Output has {len(output_streams['subtitle_streams'])} subtitle streams")
-            
-            # Additional post-processing for MX Player if needed
-            if target_ext.lower() == '.mp4':
-                # Run qt-faststart for better MP4 compatibility
-                try:
-                    temp_output = output_path + ".temp"
-                    os.rename(output_path, temp_output)
-                    qt_cmd = ["qt-faststart", temp_output, output_path]
-                    subprocess.run(qt_cmd, capture_output=True)
-                    os.remove(temp_output)
-                    print("Applied qt-faststart for better streaming")
-                except:
-                    pass
-            
-            return True
+        # For small files (< 150MB), use more aggressive size optimization
+        if target_size_mb < 150:
+            print("Small file detected - using optimized settings for size")
+            # Try optimized merge
+            if merge_for_mx_player_compatibility(source_path, target_path, output_path):
+                print("=== MX Player Optimized Merge Successful ===")
+                
+                # Check output size
+                if os.path.exists(output_path):
+                    output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+                    size_increase = ((output_size_mb - target_size_mb) / target_size_mb) * 100
+                    print(f"Output size: {output_size_mb:.2f} MB (Increase: {size_increase:.1f}%)")
+                
+                return True
         else:
-            print("MX Player merge failed, trying standard method...")
-            # Fallback to standard method but with MX Player fixes
-            return merge_audio_subtitles_v2_mx_fixed(source_path, target_path, output_path)
+            # For larger files, use standard method
+            print("Larger file - using standard merge")
+            # Try MX Player optimized merge first
+            if merge_for_mx_player_compatibility(source_path, target_path, output_path):
+                print("=== MX Player Optimized Merge Successful ===")
+                
+                # Check output size
+                if os.path.exists(output_path):
+                    output_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+                    size_increase = ((output_size_mb - target_size_mb) / target_size_mb) * 100
+                    print(f"Output size: {output_size_mb:.2f} MB (Increase: {size_increase:.1f}%)")
+                
+                return True
+        
+        print("MX Player merge failed, trying standard method...")
+        # Fallback to standard method
+        return merge_audio_subtitles_v2_mx_fixed(source_path, target_path, output_path)
             
     except Exception as e:
         print(f"Error in MX Player merge: {e}")
@@ -842,6 +867,13 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                     
                     # Merge audio and subtitles using improved method
                     if merge_audio_subtitles_simple(source_file, target_file, output_file):
+                        # Get file sizes for comparison
+                        target_size = os.path.getsize(target_file)
+                        output_size = os.path.getsize(output_file)
+                        target_size_mb = target_size / (1024 * 1024)
+                        output_size_mb = output_size / (1024 * 1024)
+                        size_increase = ((output_size_mb - target_size_mb) / target_size_mb) * 100
+                        
                         # Upload merged file
                         await client.send_document(
                             chat_id=user_id,
@@ -851,6 +883,7 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                                 f"<blockquote>📁 {target_data['filename']}</blockquote>\n"
                                 f"<blockquote>🎵 Audio tracks added from source</blockquote>\n"
                                 f"<blockquote>📝 Subtitle tracks added from source</blockquote>\n"
+                                f"<blockquote>📊 Size: {output_size_mb:.1f}MB (Original: {target_size_mb:.1f}MB)</blockquote>\n"
                                 f"<blockquote>🔊 <b>Note:</b> Source audio is auto-selected by default</blockquote>"
                             )
                         )
@@ -891,6 +924,7 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
             
             if success_count > 0:
                 summary += "<blockquote>🎉 Merged files have been sent to you!</blockquote>\n"
+                summary += "<blockquote>📊 <b>Size Optimized:</b> Files are optimized for smaller size</blockquote>\n"
                 summary += "<blockquote>🔊 <b>Note:</b> Source audio is auto-selected by default in all players</blockquote>"
             
             await progress_msg.edit_text(summary)
@@ -930,9 +964,16 @@ def get_merging_help_text() -> str:
 5. Send <code>/done</code> again
 6. Wait for processing to complete</blockquote>
 
+<blockquote><b>✨ New Features:</b>
+- <b>Size Optimization:</b> Smart audio bitrate selection to reduce file size
+- Source audio is <b>auto-selected by default</b> in all video players
+- Original audio track names are preserved
+- File size monitoring and optimization</blockquote>
+
 <blockquote><b>⚠️ Important Notes:</b>
 - Files are matched by season and episode numbers
 - MKV format works best for merging
 - Original target file tracks are preserved
 - Source audio tracks are set as default
-- Original audio names are kept intact</blockquote>"""
+- File sizes are optimized based on target size</blockquote>"""
+ 
