@@ -147,7 +147,10 @@ def merge_audio_subtitles_v2(source_path: str, target_path: str, output_path: st
             
             "-c:s", "copy",        # Subtitles copy
             
-            "-disposition:a:0", "default",
+            "-disposition:a:0", "0",# Make TARGET audio non-default
+
+            
+            "-disposition:a:1", "default", # Make SOURCE (added) audio default
             "-map_metadata", "0",
             output_path
         ]
