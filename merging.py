@@ -4,6 +4,8 @@ import asyncio
 import tempfile
 import subprocess
 import json
+import time
+import math
 from pathlib import Path
 from typing import List, Dict, Tuple
 from pyrogram import Client, filters
@@ -23,6 +25,51 @@ class MergingState:
         self.state = "waiting_for_source"  # waiting_for_source, waiting_for_target, processing
         self.current_processing = 0
         self.total_files = 0
+
+# --- PROGRESS BAR SYSTEM ---
+def make_bar(percent, length=16):
+    """Create a progress bar visualization"""
+    filled = int(length * percent / 100)
+    return "■" * filled + "□" * (length - filled)
+
+def format_eta(seconds):
+    """Format seconds into human-readable ETA"""
+    if seconds <= 0:
+        return "0s"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}h {m}m"
+    return f"{m}m {s}s" if m else f"{s}s"
+
+async def progress_callback(current, total, msg, start_time, stage, filename):
+    """Universal progress callback for download and upload"""
+    now = time.time()
+    diff = now - start_time
+
+    if diff == 0 or total == 0:
+        return
+
+    speed = current / diff
+    percent = current * 100 / total
+    eta = (total - current) / speed if speed > 0 else 0
+
+    text = (
+        f"<blockquote><b>{stage}</b></blockquote>\n\n"
+        f"<blockquote>📁 {filename}</blockquote>\n\n"
+        f"<blockquote>{make_bar(percent)}</blockquote>\n"
+        f"<blockquote>"
+        f"» Size  : {current/1024/1024:.1f} MB / {total/1024/1024:.1f} MB\n"
+        f"» Done  : {percent:.2f}%\n"
+        f"» Speed : {speed/1024/1024:.2f} MB/s\n"
+        f"» ETA   : {format_eta(eta)}"
+        f"</blockquote>"
+    )
+
+    try:
+        await msg.edit_text(text)
+    except:
+        pass
 
 # --- PARSING ENGINE FOR EPISODE MATCHING ---
 def parse_episode_info(filename: str) -> Dict:
@@ -600,7 +647,6 @@ def setup_merging_handlers(app: Client):
             state.source_files.append(file_data)
             
             # Send confirmation
-            # Send confirmation
             if len(state.source_files) % 3 == 0 or len(state.source_files) == 1:
                 await message.reply_text(
                     f"<blockquote>📥 Received {len(state.source_files)} source files.</blockquote>\n"
@@ -728,12 +774,10 @@ async def start_merging_process(client: Client, state: MergingState, message: Me
     state.state = "processing"
     state.total_files = min(len(state.source_files), len(state.target_files))
     
-    
     # Send initial processing message
     progress_msg = await message.reply_text(
-        f"<blockquote><b>🔄 Starting Merge Process</b></blockquote>\n\n"
-        f"<blockquote>📊 Matching files...\n"
-        f"⏳ Please wait...</blockquote>"
+        "<blockquote><b>🔄 Starting Merge Process</b></blockquote>\n\n"
+        "<blockquote>📊 Matching files...</blockquote>"
     )
     
     # Start the merging process in background
@@ -765,47 +809,50 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                 return
             
             # Process each matched pair
-            success_count = 0
-            failed_count = 0
-            skipped_count = len(matched_pairs) - len(valid_pairs)
-            
             for idx, (source_data, target_data) in enumerate(valid_pairs, 1):
-                # Update progress
                 try:
-                    progress_text = (
-                        f"<blockquote><b>🔄 Merging Files</b></blockquote>\n\n"
-                        f"<blockquote>📊 Progress: {idx}/{len(valid_pairs)}\n"
-                        f"✅ Successful: {success_count}\n"
-                        f"❌ Failed: {failed_count}\n"
-                        f"⏳ Current: Episode {idx}</blockquote>"
-                    )
-                    await progress_msg.edit_text(progress_text)
-                except:
-                    pass
-                
-                try:
-                    # Download source file
+                    # --- SOURCE DOWNLOAD ---
                     source_filename = f"source_{idx}{get_file_extension(source_data['filename'])}"
+                    start_time = time.time()
+                    
+                    await progress_msg.edit_text(
+                        "<blockquote><b>⬇️ Download Started (Source)</b></blockquote>"
+                    )
+                    
                     source_file = await client.download_media(
                         source_data["message"],
-                        file_name=str(temp_path / source_filename)
+                        file_name=str(temp_path / source_filename),
+                        progress=progress_callback,
+                        progress_args=(
+                            progress_msg,
+                            start_time,
+                            "⬇️ Downloading Source File",
+                            source_data["filename"]
+                        )
                     )
                     
                     if not source_file:
                         print(f"Failed to download source file {idx}")
-                        failed_count += 1
                         continue
                     
-                    # Download target file
+                    # --- TARGET DOWNLOAD ---
                     target_filename = f"target_{idx}{get_file_extension(target_data['filename'])}"
+                    start_time = time.time()
+                    
                     target_file = await client.download_media(
                         target_data["message"],
-                        file_name=str(temp_path / target_filename)
+                        file_name=str(temp_path / target_filename),
+                        progress=progress_callback,
+                        progress_args=(
+                            progress_msg,
+                            start_time,
+                            "⬇️ Downloading Target File",
+                            target_data["filename"]
+                        )
                     )
                     
                     if not target_file:
                         print(f"Failed to download target file {idx}")
-                        failed_count += 1
                         continue
                     
                     # Output file path - keep original target filename
@@ -817,9 +864,19 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                     print(f"  Target: {target_data['filename']}")
                     print(f"  Output: {output_filename}")
                     
+                    # --- MERGE STAGE ---
+                    await progress_msg.edit_text(
+                        f"<blockquote><b>🛠️ Merging Audio & Subtitles</b></blockquote>\n\n"
+                        f"<blockquote>📁 {output_filename}</blockquote>\n\n"
+                        f"<blockquote>Engine : FFmpeg</blockquote>\n"
+                        f"<blockquote>Status : Processing</blockquote>"
+                    )
+                    
                     # Merge audio and subtitles using improved method
                     if merge_audio_subtitles_simple(source_file, target_file, output_file):
-                        # Upload merged file
+                        # --- UPLOAD STAGE ---
+                        start_time = time.time()
+                        
                         await client.send_document(
                             chat_id=user_id,
                             document=output_file,
@@ -828,47 +885,49 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                                 f"<blockquote>📁 {target_data['filename']}</blockquote>\n"
                                 f"<blockquote>🎵 Audio tracks added from source</blockquote>\n"
                                 f"<blockquote>📝 Subtitle tracks added from source</blockquote>"
+                            ),
+                            progress=progress_callback,
+                            progress_args=(
+                                progress_msg,
+                                start_time,
+                                "⬆️ Uploading Merged File",
+                                output_filename
                             )
                         )
-                        success_count += 1
+                        
+                        # --- FINAL STATUS ---
+                        await progress_msg.edit_text(
+                            f"<blockquote><b>✅ Merge Completed</b></blockquote>\n\n"
+                            f"<blockquote>📁 {output_filename}</blockquote>\n"
+                            f"<blockquote>🎵 Source audio set as DEFAULT</blockquote>\n"
+                            f"<blockquote>🎯 No quality loss</blockquote>"
+                        )
+                        
                         print(f"Successfully merged file {idx}")
                     else:
-                        failed_count += 1
-                        await client.send_message(
-                            user_id,
-                            f"<blockquote>❌ Failed to merge: {target_data['filename']}</blockquote>\n"
-                            f"<blockquote><i>This file may be incompatible or corrupted.</i></blockquote>"
+                        await progress_msg.edit_text(
+                            f"<blockquote><b>❌ Merge Failed</b></blockquote>\n\n"
+                            f"<blockquote>📁 {target_data['filename']}</blockquote>\n"
+                            f"<blockquote>⚠️ This file may be incompatible or corrupted</blockquote>"
                         )
                         print(f"Failed to merge file {idx}")
                     
                 except Exception as e:
                     print(f"Error processing file {idx}: {str(e)}")
-                    failed_count += 1
-                    try:
-                        await client.send_message(
-                            user_id,
-                            f"<blockquote>❌ Error processing: {target_data['filename']}</blockquote>\n"
-                            f"<blockquote><i>Error: {str(e)[:100]}</i></blockquote>"
-                        )
-                    except:
-                        pass
+                    await progress_msg.edit_text(
+                        f"<blockquote><b>❌ Processing Error</b></blockquote>\n\n"
+                        f"<blockquote>📁 {target_data['filename']}</blockquote>\n"
+                        f"<blockquote>⚠️ Error: {str(e)[:100]}</blockquote>"
+                    )
                 
                 # Small delay to avoid flooding
                 await asyncio.sleep(2)
             
-            # Final summary
-            summary = (
-                f"<blockquote><b>📊 Merge Process Complete!</b></blockquote>\n\n"
-                f"<blockquote>✅ Successful: {success_count}\n"
-                f"❌ Failed: {failed_count}\n"
-                f"⏭️ Skipped (no match): {skipped_count}\n"
-                f"📁 Total Processed: {len(valid_pairs)}</blockquote>\n\n"
+            # Final completion message
+            await progress_msg.edit_text(
+                "<blockquote><b>✅ All Merges Completed</b></blockquote>\n\n"
+                "<blockquote>🎉 All merged files have been sent to you!</blockquote>"
             )
-            
-            if success_count > 0:
-                summary += "<blockquote>🎉 Merged files have been sent to you!</blockquote>"
-            
-            await progress_msg.edit_text(summary)
             
     except Exception as e:
         print(f"Merge process error: {str(e)}")
@@ -911,3 +970,8 @@ def get_merging_help_text() -> str:
 - Original target file tracks are preserved
 - Only new audio/subtitle tracks are added from source
 - No re-encoding (file size optimized)</blockquote>"""
+        
+        target_streams = extract_streams_info(target_info)
+        source_streams = extract_streams_info(source_info)
+        
+        print(f"Target audio streams
