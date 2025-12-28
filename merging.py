@@ -458,6 +458,13 @@ def optimize_merged_file_size(input_path: str, output_path: str) -> bool:
         original_size_mb = original_size / (1024 * 1024)
         print(f"Original merged file size: {original_size_mb:.2f} MB")
         
+        # If file is already reasonable size, skip compression
+        if original_size_mb < 180:  # Your case: 205MB is > 180, so compress
+            print(f"File is reasonable size ({original_size_mb:.2f} MB), skipping compression")
+            import shutil
+            shutil.copy2(input_path, output_path)
+            return True
+        
         # Analyze the file to understand its structure
         file_info = get_media_info(input_path)
         streams_info = extract_streams_info(file_info)
@@ -467,105 +474,287 @@ def optimize_merged_file_size(input_path: str, output_path: str) -> bool:
         
         print(f"File has {audio_streams_count} audio streams")
         
-        # Strategy: Reduce audio bitrate and optimize container
-        if original_size_mb > 150:  # Only compress if file is large
-            # Calculate target size (aim for ~30% reduction for large files)
-            target_reduction = 0.3  # 30% reduction
-            target_size_mb = original_size_mb * (1 - target_reduction)
-            
-            print(f"Target size after compression: {target_size_mb:.2f} MB")
-            
-            # Prepare compression command
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", input_path,
-            ]
-            
-            # Copy video stream (no re-encoding to preserve quality)
-            cmd.extend(["-c:v", "copy"])
-            
-            # Optimize audio streams
-            if audio_streams_count > 0:
-                # For each audio stream, reduce bitrate
-                for i in range(audio_streams_count):
-                    # Determine optimal bitrate for this stream
-                    if original_size_mb < 200:
-                        bitrate = "128k"
-                    elif original_size_mb < 300:
-                        bitrate = "96k"
-                    else:
-                        bitrate = "64k"
+        # More conservative compression to avoid corruption
+        # Target: 20-30% reduction, not 56%
+        
+        # Prepare compression command with CONSERVATIVE settings
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", input_path,
+            "-c:v", "copy",  # No video re-encoding
+        ]
+        
+        # Optimize audio streams CONSERVATIVELY
+        if audio_streams_count > 0:
+            for i in range(audio_streams_count):
+                # Use higher bitrates to avoid quality issues
+                if original_size_mb < 250:
+                    bitrate = "128k"  # Good quality
+                elif original_size_mb < 400:
+                    bitrate = "96k"   # Still good
+                else:
+                    bitrate = "64k"   # Only for very large files
+                
+                cmd.extend([
+                    f"-c:a:{i}", "aac",
+                    f"-b:a:{i}", bitrate,
+                    f"-ar:a:{i}", "48000",  # Keep 48kHz for compatibility
+                    f"-ac:a:{i}", "2",      # Keep stereo
+                ])
+        
+        # Copy subtitles
+        cmd.extend(["-c:s", "copy"])
+        
+        # Preserve disposition flags for auto-selection
+        # Keep original stream order and flags
+        cmd.extend([
+            "-map_metadata", "0",
+            "-map_chapters", "0",
+            "-max_muxing_queue_size", "9999",
+        ])
+        
+        # DO NOT use -movflags for MKV files
+        if output_path.endswith('.mp4'):
+            cmd.extend(["-movflags", "+faststart"])
+        
+        cmd.append(output_path)
+        
+        print(f"Conservative compression command: {' '.join(cmd[:10])}...")  # Truncated for readability
+        
+        # Run with timeout to avoid hanging
+        try:
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+        except subprocess.TimeoutExpired:
+            print("Compression timed out after 5 minutes")
+            # Copy original as fallback
+            import shutil
+            shutil.copy2(input_path, output_path)
+            return True
+        
+        if result.returncode == 0:
+            # Verify the output file exists and has reasonable size
+            if os.path.exists(output_path):
+                new_size = os.path.getsize(output_path)
+                new_size_mb = new_size / (1024 * 1024)
+                reduction = ((original_size_mb - new_size_mb) / original_size_mb) * 100
+                
+                print(f"Compression completed:")
+                print(f"  Original: {original_size_mb:.2f} MB")
+                print(f"  Compressed: {new_size_mb:.2f} MB")
+                print(f"  Reduction: {reduction:.1f}%")
+                
+                # IMPORTANT: Validate the file is playable
+                try:
+                    # Quick check - file should be at least 10MB
+                    if new_size_mb < 10:
+                        print("ERROR: Compressed file is too small, likely corrupted")
+                        raise Exception("File too small")
                     
-                    cmd.extend([
-                        f"-c:a:{i}", "aac",      # Use efficient AAC codec
-                        f"-b:a:{i}", bitrate,    # Reduced bitrate
-                        f"-ar:a:{i}", "44100",   # Lower sample rate
-                    ])
-            
-            # Copy subtitles
-            cmd.extend(["-c:s", "copy"])
-            
-            # Additional optimizations
-            cmd.extend([
-                "-movflags", "+faststart",      # For MP4 optimization
-                "-max_muxing_queue_size", "9999",  # Avoid buffer issues
-            ])
-            
-            # Metadata
-            cmd.extend([
-                "-map_metadata", "0",           # Keep original metadata
-                "-map_chapters", "0",           # Keep chapters if any
-            ])
-            
-            cmd.append(output_path)
-            
-            print(f"File compression command: {' '.join(cmd)}")
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                # Check new file size
-                if os.path.exists(output_path):
-                    new_size = os.path.getsize(output_path)
-                    new_size_mb = new_size / (1024 * 1024)
-                    reduction = ((original_size_mb - new_size_mb) / original_size_mb) * 100
+                    # Try to get media info
+                    verify_info = get_media_info(output_path)
+                    if not verify_info.get("streams"):
+                        print("ERROR: No streams found in compressed file")
+                        raise Exception("No streams found")
                     
-                    print(f"Compression successful!")
-                    print(f"Original: {original_size_mb:.2f} MB")
-                    print(f"Compressed: {new_size_mb:.2f} MB")
-                    print(f"Reduction: {reduction:.1f}%")
+                    print("Compressed file validated successfully")
+                    return True
                     
-                    # Verify the file is still playable
-                    try:
-                        verify_info = get_media_info(output_path)
-                        if verify_info.get("streams"):
-                            return True
-                    except:
-                        pass
-                return True
+                except Exception as verify_error:
+                    print(f"File validation failed: {verify_error}")
+                    # Use original file instead
+                    import shutil
+                    shutil.copy2(input_path, output_path)
+                    return True
             else:
-                print(f"Compression failed: {result.stderr[:500]}")
-                # If compression fails, just copy the original
+                print("ERROR: Compressed file was not created")
+                # Use original file
                 import shutil
                 shutil.copy2(input_path, output_path)
                 return True
-        
         else:
-            # File is already small enough, just copy it
-            print(f"File is already small ({original_size_mb:.2f} MB), skipping compression")
+            print(f"Compression failed with code {result.returncode}")
+            print(f"Error: {result.stderr[:500]}")
+            # Fallback to original
             import shutil
             shutil.copy2(input_path, output_path)
             return True
             
     except Exception as e:
         print(f"File compression error: {e}")
-        # If anything fails, just copy the original
+        # Ultimate fallback
         try:
             import shutil
             shutil.copy2(input_path, output_path)
             return True
         except:
             return False
+
+def process_merging(client: Client, state: MergingState, progress_msg: Message):
+    """Process the merging of all files"""
+    user_id = state.user_id
+    
+    try:
+        # Create temporary directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            
+            # Match files by episode
+            matched_pairs = match_files_by_episode(
+                state.source_files, 
+                state.target_files
+            )
+            
+            # Filter out pairs without source
+            valid_pairs = [(s, t) for s, t in matched_pairs if s is not None]
+            
+            if not valid_pairs:
+                await progress_msg.edit_text(
+                    "<blockquote>❌ No matching episodes found!</blockquote>\n\n"
+                    "<blockquote>Could not match source and target files by season/episode.</blockquote>"
+                )
+                return
+            
+            # Process each matched pair
+            success_count = 0
+            failed_count = 0
+            skipped_count = len(matched_pairs) - len(valid_pairs)
+            
+            for idx, (source_data, target_data) in enumerate(valid_pairs, 1):
+                # Update progress
+                try:
+                    progress_text = (
+                        f"<blockquote><b>🔄 Merging Files</b></blockquote>\n\n"
+                        f"<blockquote>📊 Progress: {idx}/{len(valid_pairs)}\n"
+                        f"✅ Successful: {success_count}\n"
+                        f"❌ Failed: {failed_count}\n"
+                        f"⏳ Current: Episode {idx}</blockquote>"
+                    )
+                    await progress_msg.edit_text(progress_text)
+                except:
+                    pass
+                
+                try:
+                    # Download source file
+                    source_filename = f"source_{idx}{get_file_extension(source_data['filename'])}"
+                    source_file = await client.download_media(
+                        source_data["message"],
+                        file_name=str(temp_path / source_filename)
+                    )
+                    
+                    if not source_file:
+                        print(f"Failed to download source file {idx}")
+                        failed_count += 1
+                        continue
+                    
+                    # Download target file
+                    target_filename = f"target_{idx}{get_file_extension(target_data['filename'])}"
+                    target_file = await client.download_media(
+                        target_data["message"],
+                        file_name=str(temp_path / target_filename)
+                    )
+                    
+                    if not target_file:
+                        print(f"Failed to download target file {idx}")
+                        failed_count += 1
+                        continue
+                    
+                    # Output file path - keep original target filename
+                    output_filename = target_data["filename"]
+                    output_file = str(temp_path / output_filename)
+                    
+                    print(f"Processing pair {idx}:")
+                    print(f"  Source: {source_data['filename']}")
+                    print(f"  Target: {target_data['filename']}")
+                    print(f"  Output: {output_filename}")
+                    
+                    # Merge audio and subtitles using improved method
+                    if merge_audio_subtitles_simple(source_file, target_file, output_file):
+                        print(f"Successfully merged file {idx}")
+                        
+                        # Check file size before sending
+                        if os.path.exists(output_file):
+                            file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
+                            print(f"File size before sending: {file_size_mb:.2f} MB")
+                            
+                            # Upload merged file
+                            await client.send_document(
+                                chat_id=user_id,
+                                document=output_file,
+                                caption=(
+                                    f"<blockquote>✅ <b>Merged File</b></blockquote>\n"
+                                    f"<blockquote>📁 {target_data['filename']}</blockquote>\n"
+                                    f"<blockquote>🎵 Audio tracks added from source</blockquote>\n"
+                                    f"<blockquote>📝 Subtitle tracks added from source</blockquote>"
+                                )
+                            )
+                            success_count += 1
+                            print(f"File {idx} sent successfully")
+                        else:
+                            print(f"ERROR: Merged file doesn't exist: {output_file}")
+                            failed_count += 1
+                            await client.send_message(
+                                user_id,
+                                f"<blockquote>❌ Failed to create merged file: {target_data['filename']}</blockquote>"
+                            )
+                    else:
+                        failed_count += 1
+                        await client.send_message(
+                            user_id,
+                            f"<blockquote>❌ Failed to merge: {target_data['filename']}</blockquote>\n"
+                            f"<blockquote><i>This file may be incompatible or corrupted.</i></blockquote>"
+                        )
+                        print(f"Failed to merge file {idx}")
+                    
+                except Exception as e:
+                    print(f"Error processing file {idx}: {str(e)}")
+                    failed_count += 1
+                    try:
+                        await client.send_message(
+                            user_id,
+                            f"<blockquote>❌ Error processing: {target_data['filename']}</blockquote>\n"
+                            f"<blockquote><i>Error: {str(e)[:100]}</i></blockquote>"
+                        )
+                    except:
+                        pass
+                
+                # Small delay to avoid flooding
+                await asyncio.sleep(2)
+            
+            # Final summary
+            summary = (
+                f"<blockquote><b>📊 Merge Process Complete!</b></blockquote>\n\n"
+                f"<blockquote>✅ Successful: {success_count}\n"
+                f"❌ Failed: {failed_count}\n"
+                f"⏭️ Skipped (no match): {skipped_count}\n"
+                f"📁 Total Processed: {len(valid_pairs)}</blockquote>\n\n"
+            )
+            
+            if success_count > 0:
+                summary += "<blockquote>🎉 Merged files have been sent to you!</blockquote>"
+            
+            await progress_msg.edit_text(summary)
+            
+    except Exception as e:
+        print(f"Merge process error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        try:
+            await progress_msg.edit_text(
+                "<blockquote>❌ An error occurred during merging.</blockquote>\n"
+                "<blockquote>Please try again with different files.</blockquote>"
+            )
+        except:
+            pass
+    
+    finally:
+        # Clean up user state
+        if user_id in merging_users:
+            del merging_users[user_id]
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
