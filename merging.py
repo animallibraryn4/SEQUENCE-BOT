@@ -13,15 +13,69 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from config import OWNER_ID
 from start import is_subscribed
 
-# Merging state management
-merging_users = {}  # Store user's merging state
+# =============================================
+# GLOBAL STATE MANAGEMENT (MULTI-USER SAFE)
+# =============================================
+
+# Store user's merging state
+merging_users = {}  
 
 # Global processing state to track cancellations
 PROCESSING_STATES = {}
 
+# Task tracking for proper cancellation
+MERGE_TASKS = {}  # user_id -> asyncio.Task
+
 # Throttling system for multiple users
 LAST_EDIT_TIME = {}
 EDIT_INTERVAL = 1.2  # Minimum 1.2 seconds between updates
+
+# =============================================
+# CENTRAL CLEANUP FUNCTION (MOST IMPORTANT)
+# =============================================
+
+async def cleanup_merging_session(user_id: int, progress_msg=None, reason="unknown"):
+    """
+    Central cleanup function for merging sessions.
+    Safely cancels and cleans up all user-specific states.
+    """
+    try:
+        # 1️⃣ Cancel async task if exists
+        task = MERGE_TASKS.get(user_id)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=1.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        
+        # 2️⃣ Mark cancelled in processing state
+        if user_id in PROCESSING_STATES:
+            PROCESSING_STATES[user_id]["cancelled"] = True
+        
+        # 3️⃣ Clear all user-specific states (PER USER ONLY)
+        MERGE_TASKS.pop(user_id, None)
+        PROCESSING_STATES.pop(user_id, None)
+        merging_users.pop(user_id, None)
+        LAST_EDIT_TIME.pop(user_id, None)
+        
+        # 4️⃣ UI update (optional)
+        if progress_msg:
+            try:
+                await progress_msg.edit_text(
+                    "<blockquote><b>🧹 Session Cleaned</b></blockquote>\n\n"
+                    f"<blockquote>Reason: {reason}</blockquote>\n"
+                    "<blockquote>Use <code>/merging</code> to start again</blockquote>"
+                )
+            except Exception:
+                pass
+                
+    except Exception as e:
+        print(f"Error in cleanup_merging_session for user {user_id}: {e}")
+
+# =============================================
+# MERGING STATE CLASS
+# =============================================
 
 class MergingState:
     """Track user's merging state"""
@@ -32,6 +86,7 @@ class MergingState:
         self.state = "waiting_for_source"  # waiting_for_source, waiting_for_target, processing
         self.current_processing = 0
         self.total_files = 0
+        self.progress_msg = None  # Reference to progress message
 
 # --- HELP TEXT UPDATE ---
 def get_merging_help_text() -> str:
