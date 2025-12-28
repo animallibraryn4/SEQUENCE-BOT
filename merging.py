@@ -172,32 +172,22 @@ def merge_with_mkvmerge(source_path: str, target_path: str, output_path: str) ->
         
         # Build the MKVToolNix command
         cmd = [
-            'mkvmerge', '-o', output_path,
-            
-            # Add target file
-            '--no-audio', target_path,  # Don't add target audio yet
-            '--video-tracks', '0',
-            '--track-order', '0:0',
-            
-            # Now add target audio (NOT default)
+            "mkvmerge", "-o", output_path,
+
+            # TARGET FILE (video + audio + subs)
+            "--video-tracks", "0",
+            "--audio-tracks", "0",
+            "--default-track", "0:no",
+            "--language", f"0:{target_lang}",
+            "--subtitle-tracks", "all",
             target_path,
-            '--audio-tracks', '0',
-            '--default-track', '0:no',
-            '--language', f'0:{target_lang}',
-            
-            # Add source audio (DEFAULT)
+
+            # SOURCE FILE (audio default + subs)
+            "--audio-tracks", "0",
+            "--default-track", "0:yes",
+            "--language", f"0:{source_lang}",
+            "--subtitle-tracks", "all",
             source_path,
-            '--audio-tracks', '0',
-            '--default-track', '0:yes',
-            '--language', f'0:{source_lang}',
-            
-            # Add target subtitles
-            target_path,
-            '--subtitle-tracks', 'all',
-            
-            # Add source subtitles
-            source_path,
-            '--subtitle-tracks', 'all'
         ]
         
         print(f"\nMKVToolNix Command:")
