@@ -1240,8 +1240,6 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                 # Clear throttle before next file
                 if user_id in LAST_EDIT_TIME:
                     del LAST_EDIT_TIME[user_id]
-                
-                # Small del
 
 # --- HELP TEXT UPDATE ---
 def get_merging_help_text() -> str:
