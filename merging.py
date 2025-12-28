@@ -971,7 +971,4 @@ def get_merging_help_text() -> str:
 - Only new audio/subtitle tracks are added from source
 - No re-encoding (file size optimized)</blockquote>"""
         
-        target_streams = extract_streams_info(target_info)
-        source_streams = extract_streams_info(source_info)
         
-        print(f"Target audio streams
