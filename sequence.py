@@ -50,14 +50,6 @@ except ImportError as e:
     MERGING_AVAILABLE = False
     user_merging_state = {}
 
-app = Client(
-    "sequence_bot", 
-    api_id=API_ID, 
-    api_hash=API_HASH, 
-    bot_token=BOT_TOKEN,
-    workdir="/content"
-)
-
 # --- REFINED PARSING ENGINE ---
 def parse_file_info(text):
     """Parse file information from text (either filename or caption)"""
@@ -258,47 +250,35 @@ async def sequence_messages(client, messages, mode="per_ep", user_id=None):
     
     return sorted_files, current_mode
 
-# ----------------------- NEW: /merging COMMAND -----------------------
-@app.on_message(filters.command("merging"))
-async def merging_cmd(client, message):
-    """Handle /merging command"""
-    if not await is_subscribed(client, message):
-        return
+# ----------------------- MODE CALLBACK HANDLER -----------------------
+def setup_sequence_handlers(app):
+    """Setup all sequence-related handlers"""
     
-    if not MERGING_AVAILABLE:
-        await message.reply_text(
-            "<blockquote>❌ Merging feature is not available.</blockquote>\n"
-            "<blockquote>Reason: FFmpeg is required for audio/subtitle merging but is not installed on the server.</blockquote>"
-        )
-        return
-    
-    await merging_command(client, message)
+    # ----------------------- NEW: /sf COMMAND -----------------------
+    @app.on_message(filters.command("sf"))
+    async def switch_mode_cmd(client, message):
+        """Handle /sf command to switch between File mode and Caption mode"""
+        if not await is_subscribed(client, message):
+            return
 
-# ----------------------- NEW: /sf COMMAND -----------------------
-@app.on_message(filters.command("sf"))
-async def switch_mode_cmd(client, message):
-    """Handle /sf command to switch between File mode and Caption mode"""
-    if not await is_subscribed(client, message):
-        return
-
-    user_id = message.from_user.id
-    current_mode = get_user_mode(user_id)
-    
-    # Create buttons based on current mode
-    if current_mode == "file":
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ File mode", callback_data="mode_file")],
-            [InlineKeyboardButton("Caption mode", callback_data="mode_caption")],
-            [InlineKeyboardButton("Close", callback_data="close_mode")]
-        ])
-    else:
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("File mode", callback_data="mode_file")],
-            [InlineKeyboardButton("✅ Caption mode", callback_data="mode_caption")],
-            [InlineKeyboardButton("Close", callback_data="close_mode")]
-        ])
-    
-    text = f"""<b>🔄 Sequence Mode Settings</b>
+        user_id = message.from_user.id
+        current_mode = get_user_mode(user_id)
+        
+        # Create buttons based on current mode
+        if current_mode == "file":
+            buttons = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ File mode", callback_data="mode_file")],
+                [InlineKeyboardButton("Caption mode", callback_data="mode_caption")],
+                [InlineKeyboardButton("Close", callback_data="close_mode")]
+            ])
+        else:
+            buttons = InlineKeyboardMarkup([
+                [InlineKeyboardButton("File mode", callback_data="mode_file")],
+                [InlineKeyboardButton("✅ Caption mode", callback_data="mode_caption")],
+                [InlineKeyboardButton("Close", callback_data="close_mode")]
+            ])
+        
+        text = f"""<b>🔄 Sequence Mode Settings</b>
 
 <blockquote><b>Current Mode:</b> {'File mode' if current_mode == 'file' else 'Caption mode'}
 
@@ -306,24 +286,24 @@ async def switch_mode_cmd(client, message):
 <b>Caption mode:</b> Sequence files using file caption
 
 ℹ️ <i>If no caption is found in Caption mode, those files will be skipped.</i></blockquote>"""
-    
-    await message.reply_text(text, reply_markup=buttons)
+        
+        await message.reply_text(text, reply_markup=buttons)
 
-# ----------------------- MODE CALLBACK HANDLER -----------------------
-@app.on_callback_query(filters.regex(r'^mode_(file|caption)$|^close_mode$'))
-async def mode_callback_handler(client, query):
-    """Handle mode switching callbacks"""
-    data = query.data
-    user_id = query.from_user.id
-    
-    if data == "mode_file":
-        set_user_mode(user_id, "file")
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ File mode", callback_data="mode_file")],
-            [InlineKeyboardButton("Caption mode", callback_data="mode_caption")],
-            [InlineKeyboardButton("Close", callback_data="close_mode")]
-        ])
-        text = """<b>🔄 Sequence Mode Settings</b>
+    # ----------------------- MODE CALLBACK HANDLER -----------------------
+    @app.on_callback_query(filters.regex(r'^mode_(file|caption)$|^close_mode$'))
+    async def mode_callback_handler(client, query):
+        """Handle mode switching callbacks"""
+        data = query.data
+        user_id = query.from_user.id
+        
+        if data == "mode_file":
+            set_user_mode(user_id, "file")
+            buttons = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ File mode", callback_data="mode_file")],
+                [InlineKeyboardButton("Caption mode", callback_data="mode_caption")],
+                [InlineKeyboardButton("Close", callback_data="close_mode")]
+            ])
+            text = """<b>🔄 Sequence Mode Settings</b>
 
 <blockquote><b>Current Mode:</b> File mode
 
@@ -331,18 +311,18 @@ async def mode_callback_handler(client, query):
 <b>Caption mode:</b> Sequence files using file caption
 
 ✅ <i>Mode switched to File mode!</i></blockquote>"""
-        
-        await query.message.edit_text(text, reply_markup=buttons)
-        await query.answer("Switched to File mode!", show_alert=True)
-        
-    elif data == "mode_caption":
-        set_user_mode(user_id, "caption")
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("File mode", callback_data="mode_file")],
-            [InlineKeyboardButton("✅ Caption mode", callback_data="mode_caption")],
-            [InlineKeyboardButton("Close", callback_data="close_mode")]
-        ])
-        text = """<b>🔄 Sequence Mode Settings</b>
+            
+            await query.message.edit_text(text, reply_markup=buttons)
+            await query.answer("Switched to File mode!", show_alert=True)
+            
+        elif data == "mode_caption":
+            set_user_mode(user_id, "caption")
+            buttons = InlineKeyboardMarkup([
+                [InlineKeyboardButton("File mode", callback_data="mode_file")],
+                [InlineKeyboardButton("✅ Caption mode", callback_data="mode_caption")],
+                [InlineKeyboardButton("Close", callback_data="close_mode")]
+            ])
+            text = """<b>🔄 Sequence Mode Settings</b>
 
 <blockquote><b>Current Mode:</b> Caption mode
 
@@ -350,614 +330,597 @@ async def mode_callback_handler(client, query):
 <b>Caption mode:</b> Sequence files using file caption
 
 ✅ <i>Mode switched to Caption mode!</i></blockquote>"""
-        
-        await query.message.edit_text(text, reply_markup=buttons)
-        await query.answer("Switched to Caption mode!", show_alert=True)
-        
-    elif data == "close_mode":
-        await query.message.delete()
-        await query.answer("Closed mode settings", show_alert=False)
+            
+            await query.message.edit_text(text, reply_markup=buttons)
+            await query.answer("Switched to Caption mode!", show_alert=True)
+            
+        elif data == "close_mode":
+            await query.message.delete()
+            await query.answer("Closed mode settings", show_alert=False)
 
-# ----------------------- SEQUENCE COMMANDS -----------------------
-@app.on_message(filters.command("fileseq"))
-async def quality_mode_cmd(client, message):
-    if not await is_subscribed(client, message):
-        return
-
-    text = (
-    "<b>➲ CHOOSE FILE ORDERS</b>\n\n"
-    "<blockquote>ꜱᴇʟᴇᴄᴛ ʜᴏᴡ ʏᴏᴜʀ ꜰɪʟᴇs ᴡɪʟʟ ʙᴇ sᴇɴᴛ\n</blockquote>"        
-    "<b>↬ᴇᴘɪsᴏᴅᴇ ꜰʟᴏᴡ</b>:\n"
-    "<blockquote>ꜰɪʟᴇs ᴀʀᴇ sᴇɴᴛ ᴇᴘɪsᴏᴅᴇ ʙʏ ᴇᴘɪsᴏᴅᴇ.\n"
-    "ᴏʀᴅᴇʀ: sᴇᴀsᴏɴ → ᴇᴘɪsᴏᴅᴇ → ǫᴜᴀʟɪᴛʏ\n\n"
-    "<i>ᴇxᴀᴍᴘʟᴇ:</i>\n"
-    "S1E1 → ᴀʟʟ ǫᴜᴀʟɪᴛɪᴇs\n"
-    "S1E2 → ᴀʟʟ ǫᴜᴀʟɪᴛɪᴇs\n</blockquote>"
-    "<b>↬ǫᴜᴀʟɪᴛʏ ꜰʟᴏᴡ</b>:\n"
-    "<blockquote>ꜰɪʟᴇs ᴀʀᴇ sᴇɴᴛ ǫᴜᴀʟɪᴛʏ ʙʏ ǫᴜᴀʟɪᴛʏ ɪɴsɪᴅᴇ ᴇᴀᴄʜ sᴇᴀsᴏɴ.\n"
-    "ᴏʀᴅᴇʀ: sᴇᴀsᴏɴ → ǫᴜᴀʟɪᴛʏ → ᴇᴘɪsᴏᴅᴇ\n\n"
-    "ᴇxᴀᴍᴘʟᴇ:\n"
-    "sᴇᴀsᴏɴ 1 → ᴀʟʟ 480ᴘ\n"
-    "sᴇᴀsᴏɴ 1 → ᴀʟʟ 720ᴘ</blockquote>"
-    )
-    
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇ ꜰʟᴏᴡ", callback_data='set_mode_per_ep')],
-        [InlineKeyboardButton("ǫᴜᴀʟɪᴛʏ ꜰʟᴏᴡ", callback_data='set_mode_group')]
-    ])
-    await message.reply_text(text, reply_markup=buttons)
-
-# ----------------------- UPDATED: /ls COMMAND -----------------------
-@app.on_message(filters.command("ls"))
-async def ls_command(client, message):
-    """Handle /ls command for channel file sequencing"""
-    if not await is_subscribed(client, message):
-        return
-    
-    user_id = message.from_user.id
-    
-    # Get user's current mode
-    current_mode = get_user_mode(user_id)
-    mode_text = "File mode" if current_mode == "file" else "Caption mode"
-    
-    # Initialize LS state for user WITH mode information
-    user_ls_state[user_id] = {
-        "step": 1,  # 1: waiting for first link, 2: waiting for second link
-        "first_link": None,
-        "first_chat": None,
-        "first_msg_id": None,
-        "mode": user_settings.get(user_id, "per_ep"),
-        "current_mode": current_mode  # Store user's File/Caption mode
-    }
-    
-    await message.reply_text(
-        f"<blockquote><b>📁 LS MODE ACTIVATED</b></blockquote>\n\n"
-        f"<blockquote>Current mode: <b>{mode_text}</b></blockquote>\n"
-        f"<blockquote>Please send the first file link from the channel/group.</blockquote>\n"
-        f"<blockquote>ℹ️ Note: For private channels, the bot must be an admin.</blockquote>"
-    )
-
-# --- Handle Telegram links for LS mode ---
-@app.on_message(filters.text & filters.regex(r'https?://t\.me/'))
-async def handle_ls_links(client, message):
-    """Handle Telegram links for LS mode"""
-    user_id = message.from_user.id
-    
-    if user_id not in user_ls_state:
-        return  # Not in LS mode
-    
-    ls_data = user_ls_state[user_id]
-    link = message.text.strip()
-    
-    print(f"Received LS link: {link}, Step: {ls_data['step']}, Mode: {ls_data.get('current_mode', 'file')}")
-    
-    try:
-        if ls_data["step"] == 1:
-            # First link
-            chat_info, msg_id = extract_message_info(link)
-            
-            print(f"Extracted first link - Chat info: {chat_info}, Msg ID: {msg_id}")
-            
-            if not msg_id:
-                await message.reply_text("<blockquote>❌ Invalid link format. Please send a valid Telegram message link.</blockquote>")
-                return
-            
-            # Store first link data
-            user_ls_state[user_id].update({
-                "first_link": link,
-                "first_chat": chat_info,
-                "first_msg_id": msg_id,
-                "step": 2
-            })
-            
-            current_mode = ls_data.get("current_mode", "file")
-            mode_text = "File mode" if current_mode == "file" else "Caption mode"
-            
-            await message.reply_text(
-                f"<blockquote><b>✅ First link received!</b></blockquote>\n\n"
-                f"<blockquote>Current mode: <b>{mode_text}</b></blockquote>\n"
-                f"<blockquote>Now please send the second file link from the same channel/group.</blockquote>"
-            )
-            
-        elif ls_data["step"] == 2:
-            # Second link
-            second_chat, second_msg_id = extract_message_info(link)
-            
-            print(f"Extracted second link - Chat info: {second_chat}, Msg ID: {second_msg_id}")
-            
-            if not second_msg_id:
-                await message.reply_text("<blockquote>❌ Invalid link format. Please send a valid Telegram message link.</blockquote>")
-                return
-            
-            # Check if both links are from same chat
-            print(f"Comparing: First chat: {ls_data['first_chat']} (type: {type(ls_data['first_chat'])}), "
-                  f"Second chat: {second_chat} (type: {type(second_chat)})")
-            
-            # Convert both to same type for comparison
-            first_chat = ls_data["first_chat"]
-            if isinstance(first_chat, int) and isinstance(second_chat, str):
-                # Try to resolve the string to ID for comparison
-                try:
-                    chat_obj = await client.get_chat(second_chat)
-                    second_chat = chat_obj.id
-                except:
-                    pass
-            elif isinstance(first_chat, str) and isinstance(second_chat, int):
-                # Try to resolve the int to username for comparison
-                try:
-                    chat_obj = await client.get_chat(second_chat)
-                    if chat_obj.username:
-                        second_chat = chat_obj.username
-                except:
-                    pass
-            
-            if first_chat != second_chat:
-                await message.reply_text("<blockquote>❌ Both links must be from the same channel/group.</blockquote>")
-                # Reset LS state
-                del user_ls_state[user_id]
-                return
-            
-            # Store second link data
-            user_ls_state[user_id].update({
-                "second_link": link,
-                "second_chat": second_chat,
-                "second_msg_id": second_msg_id
-            })
-            
-            current_mode = ls_data.get("current_mode", "file")
-            mode_text = "File mode" if current_mode == "file" else "Caption mode"
-            
-            # Show buttons for Chat/Channel choice
-            buttons = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💬 Chat", callback_data=f"ls_chat_{user_id}")],
-                [InlineKeyboardButton("📢 Channel", callback_data=f"ls_channel_{user_id}")],
-                [InlineKeyboardButton("❌ Close", callback_data=f"ls_close_{user_id}")]
-            ])
-            
-            await message.reply_text(
-                f"<blockquote><b>✅ Both links received!</b></blockquote>\n\n"
-                f"<blockquote>Current mode: <b>{mode_text}</b></blockquote>\n"
-                f"<blockquote>Choose where to send sequenced files:</blockquote>",
-                reply_markup=buttons
-            )
-            
-    except Exception as e:
-        print(f"Error handling LS link: {e}")
-        import traceback
-        traceback.print_exc()
-        await message.reply_text("<blockquote>❌ An error occurred. Please try again with valid links.</blockquote>")
-        if user_id in user_ls_state:
-            del user_ls_state[user_id]
-
-# ----------------------- SORTING ENGINE -----------------------
-async def send_sequence_files(client, message, user_id):
-    if user_id not in user_sequences or not user_sequences[user_id]:
-        await message.edit_text("<blockquote>Nᴏ ғɪʟᴇs ɪɴ sᴇǫᴜᴇɴᴄᴇ!</blockquote>")
-        return
-
-    files_data = user_sequences[user_id]
-    mode = user_settings.get(user_id, "per_ep")
-    await message.edit_text("<blockquote>📤 sᴇɴᴅɪɴɢ ғɪʟᴇs... ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ.</blockquote>")
-
-    if mode == "per_ep":
-        sorted_files = sorted(files_data, key=lambda x: (x["info"]["season"], x["info"]["episode"], x["info"]["quality"]))
-    else:
-        sorted_files = sorted(files_data, key=lambda x: (x["info"]["season"], x["info"]["quality"], x["info"]["episode"]))
-
-    for file in sorted_files:
-        try:
-            await client.copy_message(message.chat.id, from_chat_id=file["chat_id"], message_id=file["msg_id"])
-            await asyncio.sleep(0.8) 
-        except: continue
-
-    update_user_stats(user_id, len(files_data), message.from_user.first_name)
-    
-    try: await message.delete()
-    except: pass
-    user_sequences.pop(user_id, None)
-    user_notification_msg.pop(user_id, None)
-    await client.send_message(message.chat.id, "<blockquote><b>✅ ᴀʟʟ ғɪʟᴇs sᴇǫᴜᴇɴᴄᴇᴅ ꜱᴜᴄᴄᴇꜱꜰᴜʟʟʏ!</b></blockquote>")
-
-@app.on_message(filters.command("sequence"))
-async def start_sequence(client, message):
-    if not await is_subscribed(client, message):
-        return
-        
-    user_id = message.from_user.id
-    user_sequences[user_id] = []
-    if user_id in user_notification_msg:
-        del user_notification_msg[user_id]
-    
-    # Get current mode
-    current_mode = get_user_mode(user_id)
-    mode_text = "File mode (using filename)" if current_mode == "file" else "Caption mode (using file caption)"
-    
-    await message.reply_text(
-        f"<blockquote><b>ғɪʟᴇ sᴇǫᴜᴇɴᴄᴇ ᴍᴏᴅᴇ sᴛᴀʀᴛᴇᴅ!</b></blockquote>\n"
-        f"<blockquote>Current mode: {mode_text}</blockquote>\n"
-        f"<blockquote>Send your files now</blockquote>"
-    )
-
-# 🔥 MODIFIED FUNCTION: store_file - UPDATED WITH FIX AND MODE SUPPORT
-@app.on_message(filters.document | filters.video | filters.audio)
-async def store_file(client, message):
-    # First check if user is in merging mode
-    if MERGING_AVAILABLE:
-        user_id = message.from_user.id
-        if user_id in user_merging_state:
-            # Handle as merging file
-            await handle_merging_files(client, message)
+    # ----------------------- SEQUENCE COMMANDS -----------------------
+    @app.on_message(filters.command("fileseq"))
+    async def quality_mode_cmd(client, message):
+        if not await is_subscribed(client, message):
             return
-    
-    # Check force subscribe
-    if not await is_subscribed(client, message):
-        return
+
+        text = (
+        "<b>➲ CHOOSE FILE ORDERS</b>\n\n"
+        "<blockquote>ꜱᴇʟᴇᴄᴛ ʜᴏᴡ ʏᴏᴜʀ ꜰɪʟᴇs ᴡɪʟʟ ʙᴇ sᴇɴᴛ\n</blockquote>"        
+        "<b>↬ᴇᴘɪsᴏᴅᴇ ꜰʟᴏᴡ</b>:\n"
+        "<blockquote>ꜰɪʟᴇs ᴀʀᴇ sᴇɴᴛ ᴇᴘɪsᴏᴅᴇ ʙʏ ᴇᴘɪsᴏᴅᴇ.\n"
+        "ᴏʀᴅᴇʀ: sᴇᴀsᴏɴ → ᴇᴘɪsᴏᴅᴇ → ǫᴜᴀʟɪᴛʏ\n\n"
+        "<i>ᴇxᴀᴍᴘʟᴇ:</i>\n"
+        "S1E1 → ᴀʟʟ ǫᴜᴀʟɪᴛɪᴇs\n"
+        "S1E2 → ᴀʟʟ ǫᴜᴀʟɪᴛɪᴇs\n</blockquote>"
+        "<b>↬ǫᴜᴀʟɪᴛʏ ꜰʟᴏᴡ</b>:\n"
+        "<blockquote>ꜰɪʟᴇs ᴀʀᴇ sᴇɴᴛ ǫᴜᴀʟɪᴛʏ ʙʏ ǫᴜᴀʟɪᴛʏ ɪɴsɪᴅᴇ ᴇᴀᴄʜ sᴇᴀsᴏɴ.\n"
+        "ᴏʀᴅᴇʀ: sᴇᴀsᴏɴ → ǫᴜᴀʟɪᴛʏ → ᴇᴘɪsᴏᴅᴇ\n\n"
+        "ᴇxᴀᴍᴘʟᴇ:\n"
+        "sᴇᴀsᴏɴ 1 → ᴀʟʟ 480ᴘ\n"
+        "sᴇᴀsᴏɴ 1 → ᴀʟʟ 720ᴘ</blockquote>"
+        )
         
-    user_id = message.from_user.id
-    
-    # Check if we are currently in a sequence session
-    if user_id in user_sequences:
-        file_obj = message.document or message.video or message.audio
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇ ꜰʟᴏᴡ", callback_data='set_mode_per_ep')],
+            [InlineKeyboardButton("ǫᴜᴀʟɪᴛʏ ꜰʟᴏᴡ", callback_data='set_mode_group')]
+        ])
+        await message.reply_text(text, reply_markup=buttons)
+
+    # ----------------------- UPDATED: /ls COMMAND -----------------------
+    @app.on_message(filters.command("ls"))
+    async def ls_command(client, message):
+        """Handle /ls command for channel file sequencing"""
+        if not await is_subscribed(client, message):
+            return
+        
+        user_id = message.from_user.id
+        
+        # Get user's current mode
         current_mode = get_user_mode(user_id)
+        mode_text = "File mode" if current_mode == "file" else "Caption mode"
         
-        if current_mode == "caption":
-            # Caption mode: Use caption text or ask to switch mode
-            if message.caption:
-                text_to_parse = message.caption
-            else:
-                # No caption found, ask user to switch mode
+        # Initialize LS state for user WITH mode information
+        user_ls_state[user_id] = {
+            "step": 1,  # 1: waiting for first link, 2: waiting for second link
+            "first_link": None,
+            "first_chat": None,
+            "first_msg_id": None,
+            "mode": user_settings.get(user_id, "per_ep"),
+            "current_mode": current_mode  # Store user's File/Caption mode
+        }
+        
+        await message.reply_text(
+            f"<blockquote><b>📁 LS MODE ACTIVATED</b></blockquote>\n\n"
+            f"<blockquote>Current mode: <b>{mode_text}</b></blockquote>\n"
+            f"<blockquote>Please send the first file link from the channel/group.</blockquote>\n"
+            f"<blockquote>ℹ️ Note: For private channels, the bot must be an admin.</blockquote>"
+        )
+
+    # --- Handle Telegram links for LS mode ---
+    @app.on_message(filters.text & filters.regex(r'https?://t\.me/'))
+    async def handle_ls_links(client, message):
+        """Handle Telegram links for LS mode"""
+        user_id = message.from_user.id
+        
+        if user_id not in user_ls_state:
+            return  # Not in LS mode
+        
+        ls_data = user_ls_state[user_id]
+        link = message.text.strip()
+        
+        print(f"Received LS link: {link}, Step: {ls_data['step']}, Mode: {ls_data.get('current_mode', 'file')}")
+        
+        try:
+            if ls_data["step"] == 1:
+                # First link
+                chat_info, msg_id = extract_message_info(link)
+                
+                print(f"Extracted first link - Chat info: {chat_info}, Msg ID: {msg_id}")
+                
+                if not msg_id:
+                    await message.reply_text("<blockquote>❌ Invalid link format. Please send a valid Telegram message link.</blockquote>")
+                    return
+                
+                # Store first link data
+                user_ls_state[user_id].update({
+                    "first_link": link,
+                    "first_chat": chat_info,
+                    "first_msg_id": msg_id,
+                    "step": 2
+                })
+                
+                current_mode = ls_data.get("current_mode", "file")
+                mode_text = "File mode" if current_mode == "file" else "Caption mode"
+                
                 await message.reply_text(
-                    "<blockquote>❌ No caption found for this file!</blockquote>\n"
-                    "<blockquote>Please switch to File mode using /sf or add a caption to the file.</blockquote>"
+                    f"<blockquote><b>✅ First link received!</b></blockquote>\n\n"
+                    f"<blockquote>Current mode: <b>{mode_text}</b></blockquote>\n"
+                    f"<blockquote>Now please send the second file link from the same channel/group.</blockquote>"
                 )
-                return
-        else:
-            # File mode: Use filename
-            file_name = file_obj.file_name if file_obj else "Unknown"
-            text_to_parse = file_name
-        
-        info = parse_file_info(text_to_parse)
-        
-        user_sequences[user_id].append({
-            "filename": text_to_parse,
-            "msg_id": message.id,
-            "chat_id": message.chat.id,
-            "info": info
-        })
-        # Get current count
-        current_count = len(user_sequences[user_id])
-
-        # 🔥 Send "Processing" ONLY if 20+ files are added
-        if user_id not in user_notification_msg and user_id not in processing_users and current_count >= 20:
-            processing_users.add(user_id) # Lock the user
-            try:
-                msg = await client.send_message(
-                    message.chat.id,
-                    "<blockquote>⏳ Processing files… please wait</blockquote>"
+                
+            elif ls_data["step"] == 2:
+                # Second link
+                second_chat, second_msg_id = extract_message_info(link)
+                
+                print(f"Extracted second link - Chat info: {second_chat}, Msg ID: {second_msg_id}")
+                
+                if not second_msg_id:
+                    await message.reply_text("<blockquote>❌ Invalid link format. Please send a valid Telegram message link.</blockquote>")
+                    return
+                
+                # Check if both links are from same chat
+                print(f"Comparing: First chat: {ls_data['first_chat']} (type: {type(ls_data['first_chat'])}), "
+                      f"Second chat: {second_chat} (type: {type(second_chat)})")
+                
+                # Convert both to same type for comparison
+                first_chat = ls_data["first_chat"]
+                if isinstance(first_chat, int) and isinstance(second_chat, str):
+                    # Try to resolve the string to ID for comparison
+                    try:
+                        chat_obj = await client.get_chat(second_chat)
+                        second_chat = chat_obj.id
+                    except:
+                        pass
+                elif isinstance(first_chat, str) and isinstance(second_chat, int):
+                    # Try to resolve the int to username for comparison
+                    try:
+                        chat_obj = await client.get_chat(second_chat)
+                        if chat_obj.username:
+                            second_chat = chat_obj.username
+                    except:
+                        pass
+                
+                if first_chat != second_chat:
+                    await message.reply_text("<blockquote>❌ Both links must be from the same channel/group.</blockquote>")
+                    # Reset LS state
+                    del user_ls_state[user_id]
+                    return
+                
+                # Store second link data
+                user_ls_state[user_id].update({
+                    "second_link": link,
+                    "second_chat": second_chat,
+                    "second_msg_id": second_msg_id
+                })
+                
+                current_mode = ls_data.get("current_mode", "file")
+                mode_text = "File mode" if current_mode == "file" else "Caption mode"
+                
+                # Show buttons for Chat/Channel choice
+                buttons = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💬 Chat", callback_data=f"ls_chat_{user_id}")],
+                    [InlineKeyboardButton("📢 Channel", callback_data=f"ls_channel_{user_id}")],
+                    [InlineKeyboardButton("❌ Close", callback_data=f"ls_close_{user_id}")]
+                ])
+                
+                await message.reply_text(
+                    f"<blockquote><b>✅ Both links received!</b></blockquote>\n\n"
+                    f"<blockquote>Current mode: <b>{mode_text}</b></blockquote>\n"
+                    f"<blockquote>Choose where to send sequenced files:</blockquote>",
+                    reply_markup=buttons
                 )
-                user_notification_msg[user_id] = {
-                    "msg_id": msg.id,
-                    "chat_id": message.chat.id
-                }
-            finally:
-                processing_users.remove(user_id) # Release the lock
-        
-        # Cancel previous update task and start a new one (Debouncing)
-        if user_id in update_tasks: 
-            update_tasks[user_id].cancel()
-        update_tasks[user_id] = asyncio.create_task(update_notification(client, user_id, message.chat.id))
-
-# 🔥 MODIFIED FUNCTION: update_notification
-async def update_notification(client, user_id, chat_id):
-    await asyncio.sleep(3) 
-    if user_id not in user_sequences: return
-    count = len(user_sequences[user_id])
-    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("Send", callback_data='send_sequence'), InlineKeyboardButton("Cancel", callback_data='cancel_sequence')]])
-    text = f"<blockquote>ғɪʟᴇs ᴀᴅᴅᴇᴅ! ᴄʟɪᴄᴋ ʙᴜᴛᴛᴏɴs ʙᴇʟᴏᴡ:</blockquote>\n<blockquote>ᴛᴏᴛᴀʟ ғɪʟᴇs: {count}</blockquote>"
-    if user_id in user_notification_msg:
-        try: await client.edit_message_text(chat_id=user_notification_msg[user_id]["chat_id"], message_id=user_notification_msg[user_id]["msg_id"], text=text, reply_markup=buttons)
-        except: pass 
-    else:
-        msg = await client.send_message(chat_id, text, reply_markup=buttons)
-        user_notification_msg[user_id] = {"msg_id": msg.id, "chat_id": chat_id}
-
-# ----------------------- CALLBACK HANDLERS -----------------------
-
-# LS Callback handlers (these need to be in sequence.py since they use LS functions)
-@app.on_callback_query(filters.regex(r'^ls_(chat|channel|close)_'))
-async def ls_callback_handlers(client, query):
-    data = query.data
-    user_id = query.from_user.id
-    
-    # Extract target_user_id from callback data
-    try:
-        parts = data.split("_")
-        action = parts[1]  # chat, channel, or close
-        target_user_id = int(parts[2])
-    except (IndexError, ValueError):
-        await query.answer("Invalid callback data.", show_alert=True)
-        return
-    
-    if user_id != target_user_id:
-        await query.answer("This button is not for you!", show_alert=True)
-        return
-    
-    if target_user_id not in user_ls_state:
-        await query.answer("Session expired. Please start again with /ls", show_alert=True)
-        await query.message.delete()
-        return
-    
-    ls_data = user_ls_state[target_user_id]
-    current_mode = ls_data.get("current_mode", "file")
-    
-    if action == "chat":
-        await query.message.edit_text("<blockquote>⏳ Fetching files from channel... Please wait.</blockquote>")
-        
-        try:
-            # Get messages between the two links
-            chat_id = ls_data["first_chat"]
-            start_msg_id = ls_data["first_msg_id"]
-            end_msg_id = ls_data["second_msg_id"]
-            
-            # Fetch messages
-            messages = await get_messages_between(client, chat_id, start_msg_id, end_msg_id)
-            
-            if not messages:
-                await query.message.edit_text("<blockquote>❌ No files found between the specified links.</blockquote>")
-                return
-            
-            # Process and sequence files WITH user mode
-            sorted_files, used_mode = await sequence_messages(client, messages, ls_data["mode"], target_user_id)
-            
-            if not sorted_files:
-                if used_mode == "caption":
-                    await query.message.edit_text(
-                        "<blockquote>❌ No files with captions found in the specified range.</blockquote>\n"
-                        "<blockquote>Switch to File mode using /sf or ensure files have captions.</blockquote>"
-                    )
-                else:
-                    await query.message.edit_text("<blockquote>❌ No valid files found to sequence.</blockquote>")
-                return
-            
-            mode_text = "File mode" if used_mode == "file" else "Caption mode"
-            skipped_count = len(messages) - len(sorted_files) if used_mode == "caption" else 0
-            
-            # Send files to user's chat
-            if skipped_count > 0:
-                await query.message.edit_text(
-                    f"<blockquote>📤 Sending {len(sorted_files)} files to chat... (Skipped {skipped_count} files without captions)</blockquote>"
-                )
-            else:
-                await query.message.edit_text(f"<blockquote>📤 Sending {len(sorted_files)} files to chat... Please wait.</blockquote>")
-            
-            for file in sorted_files:
-                try:
-                    await client.copy_message(user_id, from_chat_id=file["chat_id"], message_id=file["msg_id"])
-                    await asyncio.sleep(0.8)
-                except Exception as e:
-                    print(f"Error sending file: {e}")
-                    continue
-            
-            # Update user stats
-            update_user_stats(user_id, len(sorted_files), query.from_user.first_name)
-            
-            if skipped_count > 0:
-                await query.message.edit_text(
-                    f"<blockquote><b>✅ Successfully sent {len(sorted_files)} files to your chat!</b></blockquote>\n"
-                    f"<blockquote>Mode: {mode_text}</blockquote>\n"
-                    f"<blockquote>Note: {skipped_count} files skipped (no captions found)</blockquote>"
-                )
-            else:
-                await query.message.edit_text(
-                    f"<blockquote><b>✅ Successfully sent {len(sorted_files)} files to your chat!</b></blockquote>\n"
-                    f"<blockquote>Mode: {mode_text}</blockquote>"
-                )
-            
+                
         except Exception as e:
-            print(f"LS Chat error: {e}")
-            await query.message.edit_text("<blockquote>❌ An error occurred while processing files. Please try again.</blockquote>")
-        
-        # Clean up
-        if target_user_id in user_ls_state:
-            del user_ls_state[target_user_id]
-    
-    elif action == "channel":
-        await query.message.edit_text("<blockquote>⏳ Checking bot permissions in channel... Please wait.</blockquote>")
-        
-        try:
-            # Check if bot is admin in the channel
-            chat_id = ls_data["first_chat"]
-            
-            # First, let's try to get chat info
-            try:
-                chat = await client.get_chat(chat_id)
-                await query.message.edit_text(f"<blockquote>Checking channel: {chat.title} ({chat_id})</blockquote>")
-            except Exception as e:
-                await query.message.edit_text(f"<blockquote>Error getting channel info: {e}</blockquote>")
-                return
-            
-            # Now check admin status
-            is_admin = await check_bot_admin(client, chat_id)
-            
-            if not is_admin:
-                # Get more detailed info about the bot's status
-                try:
-                    bot_member = await client.get_chat_member(chat_id, "me")
-                    status_info = f"Bot status: {bot_member.status}, Type: {type(bot_member.status)}"
-                    
-                    await query.message.edit_text(
-                        f"<blockquote><b>❌ Bot admin check failed!</b></blockquote>\n\n"
-                        f"<blockquote>Chat ID: {chat_id}\n"
-                        f"Chat Title: {chat.title}\n"
-                        f"Status: {status_info}\n\n"
-                        f"To send files back to the channel, the bot must be added as an administrator " 
-                        f"with permission to post messages.</blockquote>"
-                    )
-                except Exception as e:
-                    await query.message.edit_text(
-                        f"<blockquote><b>❌ Bot is not admin in this channel!</b></blockquote>\n\n"
-                        f"<blockquote>Error checking status: {e}\n\n"
-                        f"To send files back to the channel, the bot must be added as an administrator "
-                        f"with permission to post messages.</blockquote>"
-                    )
-                return
-            
-            await query.message.edit_text("<blockquote>✅ Bot is admin! Fetching files from channel... Please wait.</blockquote>")
-            
-            # Get messages between the two links
-            start_msg_id = ls_data["first_msg_id"]
-            end_msg_id = ls_data["second_msg_id"]
-            
-            # Fetch messages
-            messages = await get_messages_between(client, chat_id, start_msg_id, end_msg_id)
-            
-            if not messages:
-                await query.message.edit_text("<blockquote>❌ No files found between the specified links.</blockquote>")
-                return
-            
-            # Process and sequence files WITH user mode
-            sorted_files, used_mode = await sequence_messages(client, messages, ls_data["mode"], target_user_id)
-            
-            if not sorted_files:
-                if used_mode == "caption":
-                    await query.message.edit_text(
-                        "<blockquote>❌ No files with captions found in the specified range.</blockquote>\n"
-                        "<blockquote>Switch to File mode using /sf or ensure files have captions.</blockquote>"
-                    )
-                else:
-                    await query.message.edit_text("<blockquote>❌ No valid files found to sequence.</blockquote>")
-                return
-            
-            mode_text = "File mode" if used_mode == "file" else "Caption mode"
-            skipped_count = len(messages) - len(sorted_files) if used_mode == "caption" else 0
-            
-            # Send files back to channel
-            if skipped_count > 0:
-                await query.message.edit_text(
-                    f"<blockquote>📤 Sending {len(sorted_files)} files to channel... (Skipped {skipped_count} files without captions)</blockquote>"
-                )
-            else:
-                await query.message.edit_text(f"<blockquote>📤 Sending {len(sorted_files)} files to channel... Please wait.</blockquote>")
-            
-            success_count = 0
-            for file in sorted_files:
-                try:
-                    await client.copy_message(chat_id, from_chat_id=file["chat_id"], message_id=file["msg_id"])
-                    
-                    # --- FIX FOR FloodWait Error: Increased delay and FloodWait handling ---
-                    await asyncio.sleep(2)  # Wait 2 seconds between sending files
-                    
-                except FloodWait as e:
-                    # Telegram explicitly told us to wait. We must comply.
-                    print(f"FloodWait triggered. Sleeping for {e.value} seconds as requested by Telegram.")
-                    await asyncio.sleep(e.value)  # Wait for the exact required time
-                    
-                except Exception as e:
-                    print(f"Non-FloodWait error sending file to channel: {e}")
-                    continue
-                else:
-                    success_count += 1
-            
-            # Update user stats
-            update_user_stats(user_id, success_count, query.from_user.first_name)
-            
-            if skipped_count > 0:
-                await query.message.edit_text(
-                    f"<blockquote><b>✅ Successfully sent {success_count} files back to the channel!</b></blockquote>\n"
-                    f"<blockquote>Mode: {mode_text}</blockquote>\n"
-                    f"<blockquote>Total files found: {len(messages)}\n"
-                    f"Files with captions: {len(sorted_files)}\n"
-                    f"Successfully sent: {success_count}\n"
-                    f"Skipped (no captions): {skipped_count}</blockquote>"
-                )
-            else:
-                await query.message.edit_text(
-                    f"<blockquote><b>✅ Successfully sent {success_count} files back to the channel!</b></blockquote>\n"
-                    f"<blockquote>Mode: {mode_text}</blockquote>\n"
-                    f"<blockquote>Total files found: {len(sorted_files)}\n"
-                    f"Successfully sent: {success_count}</blockquote>"
-                )
-            
-        except Exception as e:
-            print(f"LS Channel error: {e}")
+            print(f"Error handling LS link: {e}")
             import traceback
             traceback.print_exc()
-            await query.message.edit_text(f"<blockquote>❌ An error occurred: {str(e)[:200]}...</blockquote>")
-        
-        # Clean up
-        if target_user_id in user_ls_state:
-            del user_ls_state[target_user_id]
-            
-    elif action == "close":
-        # Handle Close button for LS
-        await query.message.delete()
-        
-        # Clean up
-        if target_user_id in user_ls_state:
-            del user_ls_state[target_user_id]
+            await message.reply_text("<blockquote>❌ An error occurred. Please try again with valid links.</blockquote>")
+            if user_id in user_ls_state:
+                del user_ls_state[user_id]
 
-# ----------------------- SEQUENCE MODES CALLBACKS -----------------------
-@app.on_callback_query(filters.regex(r'^set_mode_(group|per_ep)$'))
-async def set_mode_callback(client, query):
-    data = query.data
-    user_id = query.from_user.id
-    
-    if data == "set_mode_group":
-        user_settings[user_id] = "group"
-        await query.message.edit_text(
-            "<blockquote><b>✅ MODE SET: QUALITY FLOW</b></blockquote>"
-        )
-    elif data == "set_mode_per_ep":
-        user_settings[user_id] = "per_ep"
-        await query.message.edit_text(
-            "<blockquote><b>✅ MODE SET: EPISODE FLOW</b></blockquote>"
-        )
+    # ----------------------- SORTING ENGINE -----------------------
+    async def send_sequence_files(client, message, user_id):
+        if user_id not in user_sequences or not user_sequences[user_id]:
+            await message.edit_text("<blockquote>Nᴏ ғɪʟᴇs ɪɴ sᴇǫᴜᴇɴᴄᴇ!</blockquote>")
+            return
 
-@app.on_callback_query(filters.regex(r'^(send_sequence|cancel_sequence)$'))
-async def sequence_control_callback(client, query):
-    data = query.data
-    user_id = query.from_user.id
-    
-    if data == "send_sequence":
-        if user_id in user_sequences:
-            await send_sequence_files(client, query.message, user_id)
-    elif data == "cancel_sequence":
+        files_data = user_sequences[user_id]
+        mode = user_settings.get(user_id, "per_ep")
+        await message.edit_text("<blockquote>📤 sᴇɴᴅɪɴɢ ғɪʟᴇs... ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ.</blockquote>")
+
+        if mode == "per_ep":
+            sorted_files = sorted(files_data, key=lambda x: (x["info"]["season"], x["info"]["episode"], x["info"]["quality"]))
+        else:
+            sorted_files = sorted(files_data, key=lambda x: (x["info"]["season"], x["info"]["quality"], x["info"]["episode"]))
+
+        for file in sorted_files:
+            try:
+                await client.copy_message(message.chat.id, from_chat_id=file["chat_id"], message_id=file["msg_id"])
+                await asyncio.sleep(0.8) 
+            except: continue
+
+        update_user_stats(user_id, len(files_data), message.from_user.first_name)
+        
+        try: await message.delete()
+        except: pass
         user_sequences.pop(user_id, None)
-        await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
+        user_notification_msg.pop(user_id, None)
+        await client.send_message(message.chat.id, "<blockquote><b>✅ ᴀʟʟ ғɪʟᴇs sᴇǫᴜᴇɴᴄᴇᴅ ꜱᴜᴄᴄᴇꜱꜰᴜʟʟʏ!</b></blockquote>")
 
-# ----------------------- MERGING CALLBACK HANDLER -----------------------
-@app.on_callback_query(filters.regex(r'^merging_'))
-async def handle_merging_callbacks(client, query):
-    """Handle merging callbacks"""
-    if not MERGING_AVAILABLE:
-        await query.answer("Merging feature not available", show_alert=True)
-        return
-    
-    data = query.data
-    
-    # Extract the callback type
-    if data.startswith("merging_done_source_"):
-        target_user_id = int(data.split("_")[3])    
+    @app.on_message(filters.command("sequence"))
+    async def start_sequence(client, message):
+        if not await is_subscribed(client, message):
+            return
+            
+        user_id = message.from_user.id
+        user_sequences[user_id] = []
+        if user_id in user_notification_msg:
+            del user_notification_msg[user_id]
+        
+        # Get current mode
+        current_mode = get_user_mode(user_id)
+        mode_text = "File mode (using filename)" if current_mode == "file" else "Caption mode (using file caption)"
+        
+        await message.reply_text(
+            f"<blockquote><b>ғɪʟᴇ sᴇǫᴜᴇɴᴄᴇ ᴍᴏᴅᴇ sᴛᴀʀᴛᴇᴅ!</b></blockquote>\n"
+            f"<blockquote>Current mode: {mode_text}</blockquote>\n"
+            f"<blockquote>Send your files now</blockquote>"
+        )
 
-        if target_user_id not in user_merging_state:
-            await query.answer("Session expired. Please start again.", show_alert=True)
+    # 🔥 MODIFIED FUNCTION: store_file - UPDATED WITH FIX AND MODE SUPPORT
+    @app.on_message(filters.document | filters.video | filters.audio)
+    async def store_file(client, message):
+        # First check if user is in merging mode
+        if MERGING_AVAILABLE:
+            user_id = message.from_user.id
+            # Note: We need to import user_merging_state from handler_merging
+            from handler_merging import merging_users
+            if user_id in merging_users:
+                # Handle as merging file
+                from handler_merging import handle_merging_files
+                await handle_merging_files(client, message)
+                return
+        
+        # Check force subscribe
+        if not await is_subscribed(client, message):
+            return
+            
+        user_id = message.from_user.id
+        
+        # Check if we are currently in a sequence session
+        if user_id in user_sequences:
+            file_obj = message.document or message.video or message.audio
+            current_mode = get_user_mode(user_id)
+            
+            if current_mode == "caption":
+                # Caption mode: Use caption text or ask to switch mode
+                if message.caption:
+                    text_to_parse = message.caption
+                else:
+                    # No caption found, ask user to switch mode
+                    await message.reply_text(
+                        "<blockquote>❌ No caption found for this file!</blockquote>\n"
+                        "<blockquote>Please switch to File mode using /sf or add a caption to the file.</blockquote>"
+                    )
+                    return
+            else:
+                # File mode: Use filename
+                file_name = file_obj.file_name if file_obj else "Unknown"
+                text_to_parse = file_name
+            
+            info = parse_file_info(text_to_parse)
+            
+            user_sequences[user_id].append({
+                "filename": text_to_parse,
+                "msg_id": message.id,
+                "chat_id": message.chat.id,
+                "info": info
+            })
+            # Get current count
+            current_count = len(user_sequences[user_id])
+
+            # 🔥 Send "Processing" ONLY if 20+ files are added
+            if user_id not in user_notification_msg and user_id not in processing_users and current_count >= 20:
+                processing_users.add(user_id) # Lock the user
+                try:
+                    msg = await client.send_message(
+                        message.chat.id,
+                        "<blockquote>⏳ Processing files… please wait</blockquote>"
+                    )
+                    user_notification_msg[user_id] = {
+                        "msg_id": msg.id,
+                        "chat_id": message.chat.id
+                    }
+                finally:
+                    processing_users.remove(user_id) # Release the lock
+            
+            # Cancel previous update task and start a new one (Debouncing)
+            if user_id in update_tasks: 
+                update_tasks[user_id].cancel()
+            update_tasks[user_id] = asyncio.create_task(update_notification(client, user_id, message.chat.id))
+
+    # 🔥 MODIFIED FUNCTION: update_notification
+    async def update_notification(client, user_id, chat_id):
+        await asyncio.sleep(3) 
+        if user_id not in user_sequences: return
+        count = len(user_sequences[user_id])
+        buttons = InlineKeyboardMarkup([[InlineKeyboardButton("Send", callback_data='send_sequence'), InlineKeyboardButton("Cancel", callback_data='cancel_sequence')]])
+        text = f"<blockquote>ғɪʟᴇs ᴀᴅᴅᴇᴅ! ᴄʟɪᴄᴋ ʙᴜᴛᴛᴏɴs ʙᴇʟᴏᴡ:</blockquote>\n<blockquote>ᴛᴏᴛᴀʟ ғɪʟᴇs: {count}</blockquote>"
+        if user_id in user_notification_msg:
+            try: await client.edit_message_text(chat_id=user_notification_msg[user_id]["chat_id"], message_id=user_notification_msg[user_id]["msg_id"], text=text, reply_markup=buttons)
+            except: pass 
+        else:
+            msg = await client.send_message(chat_id, text, reply_markup=buttons)
+            user_notification_msg[user_id] = {"msg_id": msg.id, "chat_id": chat_id}
+
+    # ----------------------- LS CALLBACK HANDLERS -----------------------
+    @app.on_callback_query(filters.regex(r'^ls_(chat|channel|close)_'))
+    async def ls_callback_handlers(client, query):
+        data = query.data
+        user_id = query.from_user.id
+        
+        # Extract target_user_id from callback data
+        try:
+            parts = data.split("_")
+            action = parts[1]  # chat, channel, or close
+            target_user_id = int(parts[2])
+        except (IndexError, ValueError):
+            await query.answer("Invalid callback data.", show_alert=True)
             return
         
-        # Add your merging logic here...
-        await query.answer("Processing...")
+        if user_id != target_user_id:
+            await query.answer("This button is not for you!", show_alert=True)
+            return
+        
+        if target_user_id not in user_ls_state:
+            await query.answer("Session expired. Please start again with /ls", show_alert=True)
+            await query.message.delete()
+            return
+        
+        ls_data = user_ls_state[target_user_id]
+        current_mode = ls_data.get("current_mode", "file")
+        
+        if action == "chat":
+            await query.message.edit_text("<blockquote>⏳ Fetching files from channel... Please wait.</blockquote>")
+            
+            try:
+                # Get messages between the two links
+                chat_id = ls_data["first_chat"]
+                start_msg_id = ls_data["first_msg_id"]
+                end_msg_id = ls_data["second_msg_id"]
+                
+                # Fetch messages
+                messages = await get_messages_between(client, chat_id, start_msg_id, end_msg_id)
+                
+                if not messages:
+                    await query.message.edit_text("<blockquote>❌ No files found between the specified links.</blockquote>")
+                    return
+                
+                # Process and sequence files WITH user mode
+                sorted_files, used_mode = await sequence_messages(client, messages, ls_data["mode"], target_user_id)
+                
+                if not sorted_files:
+                    if used_mode == "caption":
+                        await query.message.edit_text(
+                            "<blockquote>❌ No files with captions found in the specified range.</blockquote>\n"
+                            "<blockquote>Switch to File mode using /sf or ensure files have captions.</blockquote>"
+                        )
+                    else:
+                        await query.message.edit_text("<blockquote>❌ No valid files found to sequence.</blockquote>")
+                    return
+                
+                mode_text = "File mode" if used_mode == "file" else "Caption mode"
+                skipped_count = len(messages) - len(sorted_files) if used_mode == "caption" else 0
+                
+                # Send files to user's chat
+                if skipped_count > 0:
+                    await query.message.edit_text(
+                        f"<blockquote>📤 Sending {len(sorted_files)} files to chat... (Skipped {skipped_count} files without captions)</blockquote>"
+                    )
+                else:
+                    await query.message.edit_text(f"<blockquote>📤 Sending {len(sorted_files)} files to chat... Please wait.</blockquote>")
+                
+                for file in sorted_files:
+                    try:
+                        await client.copy_message(user_id, from_chat_id=file["chat_id"], message_id=file["msg_id"])
+                        await asyncio.sleep(0.8)
+                    except Exception as e:
+                        print(f"Error sending file: {e}")
+                        continue
+                
+                # Update user stats
+                update_user_stats(user_id, len(sorted_files), query.from_user.first_name)
+                
+                if skipped_count > 0:
+                    await query.message.edit_text(
+                        f"<blockquote><b>✅ Successfully sent {len(sorted_files)} files to your chat!</b></blockquote>\n"
+                        f"<blockquote>Mode: {mode_text}</blockquote>\n"
+                        f"<blockquote>Note: {skipped_count} files skipped (no captions found)</blockquote>"
+                    )
+                else:
+                    await query.message.edit_text(
+                        f"<blockquote><b>✅ Successfully sent {len(sorted_files)} files to your chat!</b></blockquote>\n"
+                        f"<blockquote>Mode: {mode_text}</blockquote>"
+                    )
+                
+            except Exception as e:
+                print(f"LS Chat error: {e}")
+                await query.message.edit_text("<blockquote>❌ An error occurred while processing files. Please try again.</blockquote>")
+            
+            # Clean up
+            if target_user_id in user_ls_state:
+                del user_ls_state[target_user_id]
+        
+        elif action == "channel":
+            await query.message.edit_text("<blockquote>⏳ Checking bot permissions in channel... Please wait.</blockquote>")
+            
+            try:
+                # Check if bot is admin in the channel
+                chat_id = ls_data["first_chat"]
+                
+                # First, let's try to get chat info
+                try:
+                    chat = await client.get_chat(chat_id)
+                    await query.message.edit_text(f"<blockquote>Checking channel: {chat.title} ({chat_id})</blockquote>")
+                except Exception as e:
+                    await query.message.edit_text(f"<blockquote>Error getting channel info: {e}</blockquote>")
+                    return
+                
+                # Now check admin status
+                is_admin = await check_bot_admin(client, chat_id)
+                
+                if not is_admin:
+                    # Get more detailed info about the bot's status
+                    try:
+                        bot_member = await client.get_chat_member(chat_id, "me")
+                        status_info = f"Bot status: {bot_member.status}, Type: {type(bot_member.status)}"
+                        
+                        await query.message.edit_text(
+                            f"<blockquote><b>❌ Bot admin check failed!</b></blockquote>\n\n"
+                            f"<blockquote>Chat ID: {chat_id}\n"
+                            f"Chat Title: {chat.title}\n"
+                            f"Status: {status_info}\n\n"
+                            f"To send files back to the channel, the bot must be added as an administrator " 
+                            f"with permission to post messages.</blockquote>"
+                        )
+                    except Exception as e:
+                        await query.message.edit_text(
+                            f"<blockquote><b>❌ Bot is not admin in this channel!</b></blockquote>\n\n"
+                            f"<blockquote>Error checking status: {e}\n\n"
+                            f"To send files back to the channel, the bot must be added as an administrator "
+                            f"with permission to post messages.</blockquote>"
+                        )
+                    return
+                
+                await query.message.edit_text("<blockquote>✅ Bot is admin! Fetching files from channel... Please wait.</blockquote>")
+                
+                # Get messages between the two links
+                start_msg_id = ls_data["first_msg_id"]
+                end_msg_id = ls_data["second_msg_id"]
+                
+                # Fetch messages
+                messages = await get_messages_between(client, chat_id, start_msg_id, end_msg_id)
+                
+                if not messages:
+                    await query.message.edit_text("<blockquote>❌ No files found between the specified links.</blockquote>")
+                    return
+                
+                # Process and sequence files WITH user mode
+                sorted_files, used_mode = await sequence_messages(client, messages, ls_data["mode"], target_user_id)
+                
+                if not sorted_files:
+                    if used_mode == "caption":
+                        await query.message.edit_text(
+                            "<blockquote>❌ No files with captions found in the specified range.</blockquote>\n"
+                            "<blockquote>Switch to File mode using /sf or ensure files have captions.</blockquote>"
+                        )
+                    else:
+                        await query.message.edit_text("<blockquote>❌ No valid files found to sequence.</blockquote>")
+                    return
+                
+                mode_text = "File mode" if used_mode == "file" else "Caption mode"
+                skipped_count = len(messages) - len(sorted_files) if used_mode == "caption" else 0
+                
+                # Send files back to channel
+                if skipped_count > 0:
+                    await query.message.edit_text(
+                        f"<blockquote>📤 Sending {len(sorted_files)} files to channel... (Skipped {skipped_count} files without captions)</blockquote>"
+                    )
+                else:
+                    await query.message.edit_text(f"<blockquote>📤 Sending {len(sorted_files)} files to channel... Please wait.</blockquote>")
+                
+                success_count = 0
+                for file in sorted_files:
+                    try:
+                        await client.copy_message(chat_id, from_chat_id=file["chat_id"], message_id=file["msg_id"])
+                        
+                        # --- FIX FOR FloodWait Error: Increased delay and FloodWait handling ---
+                        await asyncio.sleep(2)  # Wait 2 seconds between sending files
+                        
+                    except FloodWait as e:
+                        # Telegram explicitly told us to wait. We must comply.
+                        print(f"FloodWait triggered. Sleeping for {e.value} seconds as requested by Telegram.")
+                        await asyncio.sleep(e.value)  # Wait for the exact required time
+                        
+                    except Exception as e:
+                        print(f"Non-FloodWait error sending file to channel: {e}")
+                        continue
+                    else:
+                        success_count += 1
+                
+                # Update user stats
+                update_user_stats(user_id, success_count, query.from_user.first_name)
+                
+                if skipped_count > 0:
+                    await query.message.edit_text(
+                        f"<blockquote><b>✅ Successfully sent {success_count} files back to the channel!</b></blockquote>\n"
+                        f"<blockquote>Mode: {mode_text}</blockquote>\n"
+                        f"<blockquote>Total files found: {len(messages)}\n"
+                        f"Files with captions: {len(sorted_files)}\n"
+                        f"Successfully sent: {success_count}\n"
+                        f"Skipped (no captions): {skipped_count}</blockquote>"
+                    )
+                else:
+                    await query.message.edit_text(
+                        f"<blockquote><b>✅ Successfully sent {success_count} files back to the channel!</b></blockquote>\n"
+                        f"<blockquote>Mode: {mode_text}</blockquote>\n"
+                        f"<blockquote>Total files found: {len(sorted_files)}\n"
+                        f"Successfully sent: {success_count}</blockquote>"
+                    )
+                
+            except Exception as e:
+                print(f"LS Channel error: {e}")
+                import traceback
+                traceback.print_exc()
+                await query.message.edit_text(f"<blockquote>❌ An error occurred: {str(e)[:200]}...</blockquote>")
+            
+            # Clean up
+            if target_user_id in user_ls_state:
+                del user_ls_state[target_user_id]
+                
+        elif action == "close":
+            # Handle Close button for LS
+            await query.message.delete()
+            
+            # Clean up
+            if target_user_id in user_ls_state:
+                del user_ls_state[target_user_id]
 
-# ----------------------- MAIN ENTRY POINT -----------------------
-def main():
-    """Initialize and run the bot"""
-    # Set bot start time
-    set_bot_start_time()
-    
-    # Setup start handlers
-    setup_start_handlers(app)
-    
-    # Run the bot
-    app.run()
+    # ----------------------- SEQUENCE MODES CALLBACKS -----------------------
+    @app.on_callback_query(filters.regex(r'^set_mode_(group|per_ep)$'))
+    async def set_mode_callback(client, query):
+        data = query.data
+        user_id = query.from_user.id
+        
+        if data == "set_mode_group":
+            user_settings[user_id] = "group"
+            await query.message.edit_text(
+                "<blockquote><b>✅ MODE SET: QUALITY FLOW</b></blockquote>"
+            )
+        elif data == "set_mode_per_ep":
+            user_settings[user_id] = "per_ep"
+            await query.message.edit_text(
+                "<blockquote><b>✅ MODE SET: EPISODE FLOW</b></blockquote>"
+            )
 
-if __name__ == "__main__":
-    main()
+    @app.on_callback_query(filters.regex(r'^(send_sequence|cancel_sequence)$'))
+    async def sequence_control_callback(client, query):
+        data = query.data
+        user_id = query.from_user.id
+        
+        if data == "send_sequence":
+            if user_id in user_sequences:
+                await send_sequence_files(client, query.message, user_id)
+        elif data == "cancel_sequence":
+            user_sequences.pop(user_id, None)
+            await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
+    # ----------------------- MERGING COMMAND HANDLER -----------------------
+    if MERGING_AVAILABLE:
+        @app.on_message(filters.command("merging"))
+        async def merging_cmd(client, message):
+            """Handle /merging command"""
+            if not await is_subscribed(client, message):
+                return
+            
+            if not MERGING_AVAILABLE:
+                await message.reply_text(
+                    "<blockquote>❌ Merging feature is not available.</blockquote>\n"
+                    "<blockquote>Reason: FFmpeg is required for audio/subtitle merging but is not installed on the server.</blockquote>"
+                )
+                return
+            
+            # Import merging command from handler_merging
+            from handler_merging import merging_command as merging_cmd_handler
+            await merging_cmd_handler(client, message)
