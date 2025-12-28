@@ -26,7 +26,38 @@ class MergingState:
         self.current_processing = 0
         self.total_files = 0
 
-# --- PROGRESS BAR SYSTEM ---
+# --- HELP TEXT UPDATE ---
+def get_merging_help_text() -> str:
+    """Get help text for merging commands"""
+    return """
+<blockquote><b>🔧 Auto File Merging Commands</b></blockquote>
+
+<blockquote><b>/merging</b> - Start auto file merging process
+<b>/done</b> - Proceed to next step after sending files
+<b>/cancel_merge</b> - Cancel current merging process</blockquote>
+
+<blockquote><b>📝 How to use:</b>
+1. Send <code>/merging</code>
+2. Send all SOURCE files (with desired audio/subtitle tracks)
+3. Send <code>/done</code>
+4. Send all TARGET files (to add tracks to)
+5. Send <code>/done</code> again
+6. Wait for processing to complete</blockquote>
+
+<blockquote><b>🎯 NEW: MKVToolNix Engine</b>
+- ✅ Zero quality loss (no video re-encode)
+- ✅ Source audio set as DEFAULT
+- ✅ All subtitle tracks preserved
+- ✅ MX Player, VLC, Android TV compatible
+- ✅ Fast processing</blockquote>
+
+<blockquote><b>⚠️ Important Notes:</b>
+- Files are matched by season and episode numbers
+- <b>MKV format works best</b> (for MKVToolNix engine)
+- Original target file tracks are preserved
+- Only new audio/subtitle tracks are added from source
+- Server needs MKVToolNix installed</blockquote>"""
+    
 # --- PROGRESS BAR SYSTEM (MULTI-USER SAFE) ---
 def make_bar(percent, length=16):
     """Create a progress bar visualization"""
@@ -1240,11 +1271,3 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                 # Clear throttle before next file
                 if user_id in LAST_EDIT_TIME:
                     del LAST_EDIT_TIME[user_id]
-
-# --- HELP TEXT UPDATE ---
-                def get_merging_help_text() -> str:
-                    """Get help text for merging commands"""
-                    return """
-      <blockquote><b>🔧 Auto File Merging Commands</b></blockquote>"""
-
-      
