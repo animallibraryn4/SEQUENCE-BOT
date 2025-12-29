@@ -3,11 +3,11 @@ from pyrogram import Client, filters
 from config import API_ID, API_HASH, BOT_TOKEN
 from handler_merging import setup_merging_handlers
 from start import setup_start_handlers
+from file_handler import setup_file_handler
 from sequence import (
     quality_mode_cmd,
     ls_command,
     start_sequence,
-    store_file,
     mode_callback_handler,
     set_mode_callback,
     sequence_control_callback,
@@ -28,17 +28,25 @@ app = Client(
 def main():
     """Initialize and run the bot with all features"""
     
-    # IMPORTANT: Setup sequence handlers FIRST, before start handlers
-    # This ensures sequence callback handlers get called before the generic start handler
+    print("🤖 Bot starting with all features...")
+    
+    # Setup basic handlers
+    setup_start_handlers(app)
+    print("✅ Start handlers loaded")
+    
+    # Setup merging handlers
+    setup_merging_handlers(app)
+    print("✅ Merging mode loaded")
+    
+    # Setup file handler (routes files to correct mode)
+    setup_file_handler(app)
+    print("✅ File handler loaded")
     
     # Register sequence command handlers
     app.on_message(filters.command("fileseq"))(quality_mode_cmd)
     app.on_message(filters.command("ls"))(ls_command)
     app.on_message(filters.command("sequence"))(start_sequence)
     app.on_message(filters.command("sf"))(switch_mode_cmd)
-    
-    # Register file handler for sequence mode
-    app.on_message(filters.document | filters.video | filters.audio)(store_file)
     
     # Register link handler for LS mode
     app.on_message(filters.text & filters.regex(r'https?://t\.me/'))(handle_ls_links)
@@ -49,18 +57,8 @@ def main():
     app.on_callback_query(filters.regex(r'^(send_sequence|cancel_sequence)$'))(sequence_control_callback)
     app.on_callback_query(filters.regex(r'^ls_(chat|channel|close)_'))(ls_callback_handlers)
     
-    # Now setup start handlers (which has a generic callback handler)
-    setup_start_handlers(app)
-    
-    # Setup merging handlers
-    setup_merging_handlers(app)
-    
-    print("🤖 Bot starting with all features...")
     print("✅ Sequence mode loaded")
-    print("✅ Merging mode loaded (via handler_merging)")
-    print("✅ Start handlers loaded")
-    print("✅ All sequence commands registered")
-    print("✅ Callback handlers in correct order")
+    print("✅ All handlers registered")
     
     app.run()
 
