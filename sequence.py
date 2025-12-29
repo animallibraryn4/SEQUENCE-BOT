@@ -10,7 +10,6 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQ
 from pyrogram.errors import UserNotParticipant, FloodWait, ChatAdminRequired, ChannelPrivate
 from config import API_HASH, API_ID, BOT_TOKEN, MONGO_URI, START_PIC, START_MSG, HELP_TXT, COMMAND_TXT, OWNER_ID, FSUB_CHANNEL, FSUB_CHANNEL_2, FSUB_CHANNEL_3
 
-    
 # Import from our split modules
 from database import (
     user_sequences, user_notification_msg, update_tasks, 
@@ -31,20 +30,13 @@ def check_ffmpeg_available():
     except:
         return False
 
-# MERGING AVAILABLE CHECK
-MERGING_AVAILABLE = True  # Default to True
+# Global variable for merging availability
+MERGING_AVAILABLE = False
 
-# FFmpeg check karein
-try:
-    result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
-    if result.returncode == 0:
-        print("✅ FFmpeg available")
-    else:
-        print("⚠️ FFmpeg not available, merging disabled")
-        MERGING_AVAILABLE = False
-except:
-    print("⚠️ FFmpeg not available, merging disabled")
-    MERGING_AVAILABLE = False
+# Check once at module load
+MERGING_AVAILABLE = check_ffmpeg_available()
+if not MERGING_AVAILABLE:
+    print("⚠️ FFmpeg is not available. Merging feature will be disabled.")
 
 # --- REFINED PARSING ENGINE ---
 def parse_file_info(text):
@@ -249,68 +241,6 @@ async def sequence_messages(client, messages, mode="per_ep", user_id=None):
 # ----------------------- MODE CALLBACK HANDLER -----------------------
 def setup_sequence_handlers(app):
     """Setup all sequence-related handlers"""
-
-    @app.on_message(filters.command("diag"))
-    async def diagnostic_command(client, message):
-        """Diagnostic command to check what's working"""
-        user_id = message.from_user.id
-    
-        # Check various states
-        diagnostic_info = []
-    
-        # 1. Check if user in database
-        from database import users_collection
-        user_in_db = users_collection.find_one({"user_id": user_id})
-        diagnostic_info.append(f"📊 In Database: {'✅' if user_in_db else '❌'}")
-    
-        # 2. Check sequence state
-        from database import user_sequences
-        in_sequence = user_id in user_sequences
-        diagnostic_info.append(f"📁 Sequence Mode: {'✅' if in_sequence else '❌'}")
-        if in_sequence:
-            diagnostic_info.append(f"  - Files: {len(user_sequences[user_id])}")
-    
-        # 3. Check merging state
-        if MERGING_AVAILABLE:
-            try:
-                from merging import merging_users
-                in_merging = user_id in merging_users
-                diagnostic_info.append(f"🔄 Merging Mode: {'✅' if in_merging else '❌'}")
-            except:
-                diagnostic_info.append("🔄 Merging: Import failed")
-    
-        # 4. Check user mode
-        from database import get_user_mode
-        mode = get_user_mode(user_id)
-        diagnostic_info.append(f"⚙️ User Mode: {mode}")
-    
-        response = "🔍 **Bot Diagnostic Report**\n\n"
-        response += "\n".join(diagnostic_info)
-    
-        await message.reply_text(response)
-
-    @app.on_message(filters.command("testcmd"))
-    async def test_commands(client, message):
-        """Test all major commands"""
-        test_results = []
-    
-        # Test 1: Check if handler is registered
-        test_results.append("1️⃣ Basic command response: ✅")
-    
-        # Test 2: Check subscription
-        from start import is_subscribed
-        is_sub = await is_subscribed(client, message)
-        test_results.append(f"2️⃣ Force Subscribe check: {'✅ Pass' if is_sub else '❌ Blocked'}")
-    
-        # Test 3: Check user data
-        from database import users_collection
-        user_data = users_collection.find_one({"user_id": message.from_user.id})
-        test_results.append(f"3️⃣ User data in DB: {'✅ Found' if user_data else '❌ Missing'}")
-    
-        response = "🧪 **Command Test Results**\n\n"
-        response += "\n".join(test_results)
-    
-        await message.reply_text(response)
     
     # ----------------------- NEW: /sf COMMAND -----------------------
     @app.on_message(filters.command("sf"))
@@ -620,28 +550,23 @@ def setup_sequence_handlers(app):
     @app.on_message(filters.document | filters.video | filters.audio)
     async def store_file(client, message):
         # First check if user is in merging mode
-        # Import directly from merging.py instead of handler_merging.py
-        if MERGING_AVAILABLE:
-            user_id = message.from_user.id
+        user_id = message.from_user.id
         
-            # DIRECT IMPORT FROM merging.py (jahan actual state store hai)
-            try:
-                from merging import merging_users
-                if user_id in merging_users:
-                    # User merging mode mein hai, is file ko skip karo
-                    # merging.py ka handler ise apne aap handle karega
-                    print(f"User {user_id} merging mode mein hai, file skip")
-                    return
-            except ImportError as e:
-                print(f"Merging import error: {e}")
-                pass
-    
+        # Try to check merging state if merging is available
+        try:
+            from handler_merging import merging_users
+            if user_id in merging_users:
+                # Handle as merging file
+                from handler_merging import handle_merging_files
+                await handle_merging_files(client, message)
+                return
+        except ImportError:
+            pass  # Merging not available
+            
         # Check force subscribe
         if not await is_subscribed(client, message):
             return
-        
-        user_id = message.from_user.id
-        
+            
         # Check if we are currently in a sequence session
         if user_id in user_sequences:
             file_obj = message.document or message.video or message.audio
@@ -707,8 +632,8 @@ def setup_sequence_handlers(app):
         else:
             msg = await client.send_message(chat_id, text, reply_markup=buttons)
             user_notification_msg[user_id] = {"msg_id": msg.id, "chat_id": chat_id}
-
-    # ----------------------- LS CALLBACK HANDLERS -----------------------
+            
+# ----------------------- LS CALLBACK HANDLERS -----------------------
     @app.on_callback_query(filters.regex(r'^ls_(chat|channel|close)_'))
     async def ls_callback_handlers(client, query):
         data = query.data
@@ -969,13 +894,3 @@ def setup_sequence_handlers(app):
         elif data == "cancel_sequence":
             user_sequences.pop(user_id, None)
             await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
-
-    
-
-
-
-
-
-
-
-
