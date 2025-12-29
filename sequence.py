@@ -31,26 +31,9 @@ def check_ffmpeg_available():
     except:
         return False
 
+# Replace with:
+MERGING_AVAILABLE = True  # We'll check FFmpeg availability differently
 # Try to import merging module
-# Try to import merging module
-try:
-    from merging import (
-        merging_command, 
-        handle_merging_files, 
-        process_merging_files,
-        download_file,
-        extract_audio_and_subtitles,
-        user_merging_state,
-        parse_file_info as merging_parse_file_info
-    )
-    MERGING_AVAILABLE = True
-    if not check_ffmpeg_available():
-        print("⚠️ FFmpeg is not available. Merging feature will be disabled.")
-        MERGING_AVAILABLE = False
-except ImportError as e:
-    print(f"Merging module import error: {e}")
-    MERGING_AVAILABLE = False
-    user_merging_state = {}
 
 # --- REFINED PARSING ENGINE ---
 def parse_file_info(text):
@@ -909,5 +892,6 @@ def setup_sequence_handlers(app):
             await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
     
+
 
 
