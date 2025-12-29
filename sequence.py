@@ -30,7 +30,7 @@ def check_ffmpeg_available():
     except:
         return False
 
-MERGING_AVAILABLE = True
+MERGING_AVAILABLE = False
 
 app = Client(
     "sequence_bot", 
@@ -915,6 +915,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
