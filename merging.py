@@ -12,6 +12,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from config import OWNER_ID
 from start import is_subscribed
+from utils import parse_file_info
 
 
 class MergingState:
