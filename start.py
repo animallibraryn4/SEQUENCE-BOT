@@ -1,3 +1,4 @@
+
 import asyncio
 import time
 from pyrogram import Client, filters
@@ -114,7 +115,8 @@ def setup_start_handlers(app):
             reply_markup=buttons
         )
 
-    @app.on_callback_query()
+    @app.on_callback_query(filters.regex(r'^(check_fsub|all_cmds|back_start|help|close|confirm_broadcast|cancel_broadcast)$'))
+    
     async def cb_handler(client, query: CallbackQuery):
         data = query.data
         user_id = query.from_user.id
