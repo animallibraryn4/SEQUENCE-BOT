@@ -14,6 +14,8 @@ from merging import (
     get_merging_help_text, MERGE_TASKS, cleanup_merging_session
 )
 
+# Merging is handled by handler_merging.py separately
+MERGING_AVAILABLE = True  # We know it's available from handler_merging.py
 # REMOVED: from start import is_subscribed
 
 async def is_subscribed(client: Client, message: Message) -> bool:
