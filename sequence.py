@@ -579,28 +579,6 @@ def setup_sequence_handlers(app):
             return
         
         user_id = message.from_user.id
-    
-    # Rest of your code...
-
-    # 🔥 MODIFIED FUNCTION: store_file - UPDATED WITH FIX AND MODE SUPPORT
-    @app.on_message(filters.document | filters.video | filters.audio)
-    async def store_file(client, message):
-        # First check if user is in merging mode
-        if MERGING_AVAILABLE:
-            user_id = message.from_user.id
-            # Note: We need to import user_merging_state from handler_merging
-            from handler_merging import merging_users
-            if user_id in merging_users:
-                # Handle as merging file
-                from handler_merging import handle_merging_files
-                await handle_merging_files(client, message)
-                return
-        
-        # Check force subscribe
-        if not await is_subscribed(client, message):
-            return
-            
-        user_id = message.from_user.id
         
         # Check if we are currently in a sequence session
         if user_id in user_sequences:
@@ -931,6 +909,7 @@ def setup_sequence_handlers(app):
             await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
     
+
 
 
 
