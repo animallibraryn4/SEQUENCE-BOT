@@ -2,10 +2,7 @@
 import asyncio
 import re
 import time
-import os
-import sys
 import subprocess
-from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import UserNotParticipant, FloodWait, ChatAdminRequired, ChannelPrivate
@@ -17,7 +14,10 @@ from database import (
     user_settings, processing_users, user_ls_state,
     users_collection, update_user_stats, get_user_mode, set_user_mode
 )
-from start import is_subscribed, setup_start_handlers, set_bot_start_time
+from start import is_subscribed
+
+# Import the app instance from bot.py
+from bot import app
 
 # Bot start time for uptime calculation
 BOT_START_TIME = time.time()
@@ -42,14 +42,6 @@ except ImportError as e:
     print(f"Merging module import error: {e}")
     MERGING_AVAILABLE = False
     merging_users = {}
-
-app = Client(
-    "sequence_bot", 
-    api_id=API_ID, 
-    api_hash=API_HASH, 
-    bot_token=BOT_TOKEN,
-    workdir="/content"
-)
 
 # --- REFINED PARSING ENGINE ---
 def parse_file_info(text):
@@ -261,6 +253,37 @@ async def send_sequence_files(client, message, user_id):
     
     await client.send_message(message.chat.id, "<blockquote><b>✅ ᴀʟʟ ғɪʟᴇs sᴇǫᴜᴇɴᴄᴇᴅ ꜱᴜᴄᴄᴇꜱꜰᴜʟʟʏ!</b></blockquote>")
 
+# ----------------------- UPDATE NOTIFICATION FUNCTION -----------------------
+async def update_notification(client, user_id, chat_id):
+    await asyncio.sleep(3) 
+    if user_id not in user_sequences:
+        return
+        
+    count = len(user_sequences[user_id])
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Send", callback_data='send_sequence'), 
+         InlineKeyboardButton("Cancel", callback_data='cancel_sequence')]
+    ])
+    
+    text = f"<blockquote>ғɪʟᴇs ᴀᴅᴅᴇᴅ! ᴄʟɪᴄᴋ ʙᴜᴛᴛᴏɴs ʙᴇʟᴏᴡ:</blockquote>\n<blockquote>ᴛᴏᴛᴀʟ ғɪʟᴇs: {count}</blockquote>"
+    
+    if user_id in user_notification_msg:
+        try:
+            await client.edit_message_text(
+                chat_id=user_notification_msg[user_id]["chat_id"],
+                message_id=user_notification_msg[user_id]["msg_id"],
+                text=text,
+                reply_markup=buttons
+            )
+        except:
+            pass
+    else:
+        msg = await client.send_message(chat_id, text, reply_markup=buttons)
+        user_notification_msg[user_id] = {
+            "msg_id": msg.id,
+            "chat_id": chat_id
+        }
+
 # ----------------------- SEQUENCE COMMANDS -----------------------
 @app.on_message(filters.command("sequence"))
 async def start_sequence(client, message):
@@ -344,55 +367,6 @@ async def switch_mode_cmd(client, message):
 ℹ️ <i>If no caption is found in Caption mode, those files will be skipped.</i></blockquote>"""
     
     await message.reply_text(text, reply_markup=buttons)
-
-# ----------------------- MODE CALLBACK HANDLER -----------------------
-@app.on_callback_query(filters.regex(r'^mode_(file|caption)$|^close_mode$'))
-async def mode_callback_handler(client, query):
-    """Handle mode switching callbacks"""
-    data = query.data
-    user_id = query.from_user.id
-    
-    if data == "mode_file":
-        set_user_mode(user_id, "file")
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ File mode", callback_data="mode_file")],
-            [InlineKeyboardButton("Caption mode", callback_data="mode_caption")],
-            [InlineKeyboardButton("Close", callback_data="close_mode")]
-        ])
-        text = """<b>🔄 Sequence Mode Settings</b>
-
-<blockquote><b>Current Mode:</b> File mode
-
-<b>File mode:</b> Sequence files using filename
-<b>Caption mode:</b> Sequence files using file caption
-
-✅ <i>Mode switched to File mode!</i></blockquote>"""
-        
-        await query.message.edit_text(text, reply_markup=buttons)
-        await query.answer("Switched to File mode!", show_alert=True)
-        
-    elif data == "mode_caption":
-        set_user_mode(user_id, "caption")
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("File mode", callback_data="mode_file")],
-            [InlineKeyboardButton("✅ Caption mode", callback_data="mode_caption")],
-            [InlineKeyboardButton("Close", callback_data="close_mode")]
-        ])
-        text = """<b>🔄 Sequence Mode Settings</b>
-
-<blockquote><b>Current Mode:</b> Caption mode
-
-<b>File mode:</b> Sequence files using filename
-<b>Caption mode:</b> Sequence files using file caption
-
-✅ <i>Mode switched to Caption mode!</i></blockquote>"""
-        
-        await query.message.edit_text(text, reply_markup=buttons)
-        await query.answer("Switched to Caption mode!", show_alert=True)
-        
-    elif data == "close_mode":
-        await query.message.delete()
-        await query.answer("Closed mode settings", show_alert=False)
 
 # ----------------------- /ls COMMAND -----------------------
 @app.on_message(filters.command("ls"))
@@ -490,37 +464,6 @@ async def store_file(client, message):
         if user_id in update_tasks: 
             update_tasks[user_id].cancel()
         update_tasks[user_id] = asyncio.create_task(update_notification(client, user_id, message.chat.id))
-
-# ----------------------- UPDATE NOTIFICATION FUNCTION -----------------------
-async def update_notification(client, user_id, chat_id):
-    await asyncio.sleep(3) 
-    if user_id not in user_sequences:
-        return
-        
-    count = len(user_sequences[user_id])
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Send", callback_data='send_sequence'), 
-         InlineKeyboardButton("Cancel", callback_data='cancel_sequence')]
-    ])
-    
-    text = f"<blockquote>ғɪʟᴇs ᴀᴅᴅᴇᴅ! ᴄʟɪᴄᴋ ʙᴜᴛᴛᴏɴs ʙᴇʟᴏᴡ:</blockquote>\n<blockquote>ᴛᴏᴛᴀʟ ғɪʟᴇs: {count}</blockquote>"
-    
-    if user_id in user_notification_msg:
-        try:
-            await client.edit_message_text(
-                chat_id=user_notification_msg[user_id]["chat_id"],
-                message_id=user_notification_msg[user_id]["msg_id"],
-                text=text,
-                reply_markup=buttons
-            )
-        except:
-            pass
-    else:
-        msg = await client.send_message(chat_id, text, reply_markup=buttons)
-        user_notification_msg[user_id] = {
-            "msg_id": msg.id,
-            "chat_id": chat_id
-        }
 
 # ----------------------- HANDLE LS LINKS -----------------------
 @app.on_message(filters.text & filters.regex(r'https?://t\.me/'))
@@ -641,6 +584,54 @@ async def sequence_control_callback(client, query):
     elif data == "cancel_sequence":
         user_sequences.pop(user_id, None)
         await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
+
+@app.on_callback_query(filters.regex(r'^mode_(file|caption)$|^close_mode$'))
+async def mode_callback_handler(client, query):
+    """Handle mode switching callbacks"""
+    data = query.data
+    user_id = query.from_user.id
+    
+    if data == "mode_file":
+        set_user_mode(user_id, "file")
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ File mode", callback_data="mode_file")],
+            [InlineKeyboardButton("Caption mode", callback_data="mode_caption")],
+            [InlineKeyboardButton("Close", callback_data="close_mode")]
+        ])
+        text = """<b>🔄 Sequence Mode Settings</b>
+
+<blockquote><b>Current Mode:</b> File mode
+
+<b>File mode:</b> Sequence files using filename
+<b>Caption mode:</b> Sequence files using file caption
+
+✅ <i>Mode switched to File mode!</i></blockquote>"""
+        
+        await query.message.edit_text(text, reply_markup=buttons)
+        await query.answer("Switched to File mode!", show_alert=True)
+        
+    elif data == "mode_caption":
+        set_user_mode(user_id, "caption")
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("File mode", callback_data="mode_file")],
+            [InlineKeyboardButton("✅ Caption mode", callback_data="mode_caption")],
+            [InlineKeyboardButton("Close", callback_data="close_mode")]
+        ])
+        text = """<b>🔄 Sequence Mode Settings</b>
+
+<blockquote><b>Current Mode:</b> Caption mode
+
+<b>File mode:</b> Sequence files using filename
+<b>Caption mode:</b> Sequence files using file caption
+
+✅ <i>Mode switched to Caption mode!</i></blockquote>"""
+        
+        await query.message.edit_text(text, reply_markup=buttons)
+        await query.answer("Switched to Caption mode!", show_alert=True)
+        
+    elif data == "close_mode":
+        await query.message.delete()
+        await query.answer("Closed mode settings", show_alert=False)
 
 # ----------------------- LS CALLBACK HANDLERS -----------------------
 @app.on_callback_query(filters.regex(r'^ls_(chat|channel|close)_'))
@@ -847,18 +838,3 @@ async def ls_callback_handlers(client, query):
         # Clean up
         if target_user_id in user_ls_state:
             del user_ls_state[target_user_id]
-
-# ----------------------- MAIN ENTRY POINT -----------------------
-def main():
-    """Initialize and run the bot"""
-    # Set bot start time
-    set_bot_start_time()
-    
-    # Setup start handlers
-    setup_start_handlers(app)
-    
-    # Run the bot
-    app.run()
-
-if __name__ == "__main__":
-    main()
