@@ -28,11 +28,8 @@ app = Client(
 def main():
     """Initialize and run the bot with all features"""
     
-    # Setup start handlers
-    setup_start_handlers(app)
-    
-    # Setup merging handlers
-    setup_merging_handlers(app)
+    # IMPORTANT: Setup sequence handlers FIRST, before start handlers
+    # This ensures sequence callback handlers get called before the generic start handler
     
     # Register sequence command handlers
     app.on_message(filters.command("fileseq"))(quality_mode_cmd)
@@ -52,11 +49,18 @@ def main():
     app.on_callback_query(filters.regex(r'^(send_sequence|cancel_sequence)$'))(sequence_control_callback)
     app.on_callback_query(filters.regex(r'^ls_(chat|channel|close)_'))(ls_callback_handlers)
     
+    # Now setup start handlers (which has a generic callback handler)
+    setup_start_handlers(app)
+    
+    # Setup merging handlers
+    setup_merging_handlers(app)
+    
     print("🤖 Bot starting with all features...")
     print("✅ Sequence mode loaded")
     print("✅ Merging mode loaded (via handler_merging)")
     print("✅ Start handlers loaded")
     print("✅ All sequence commands registered")
+    print("✅ Callback handlers in correct order")
     
     app.run()
 
