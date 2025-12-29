@@ -1,9 +1,20 @@
 import asyncio
-from pyrogram import Client
+from pyrogram import Client, filters
 from config import API_ID, API_HASH, BOT_TOKEN
 from handler_merging import setup_merging_handlers
 from start import setup_start_handlers
-import sequence  # This will import sequence functions but NOT run them
+from sequence import (
+    quality_mode_cmd,
+    ls_command,
+    start_sequence,
+    store_file,
+    mode_callback_handler,
+    set_mode_callback,
+    sequence_control_callback,
+    ls_callback_handlers,
+    handle_ls_links,
+    switch_mode_cmd
+)
 
 # Create the main bot client
 app = Client(
@@ -17,19 +28,11 @@ app = Client(
 def main():
     """Initialize and run the bot with all features"""
     
-    # Remove the duplicate Client creation from sequence module
-    # We need to pass our app instance to sequence.py handlers
+    # Setup start handlers
+    setup_start_handlers(app)
     
-    # First setup sequence handlers using our app instance
-    from sequence import (
-        # Command handlers
-        quality_mode_cmd, ls_command, start_sequence, store_file,
-        # Callback handlers
-        mode_callback_handler, set_mode_callback, sequence_control_callback,
-        ls_callback_handlers,
-        # Other functions
-        handle_ls_links, switch_mode_cmd
-    )
+    # Setup merging handlers
+    setup_merging_handlers(app)
     
     # Register sequence command handlers
     app.on_message(filters.command("fileseq"))(quality_mode_cmd)
@@ -49,19 +52,13 @@ def main():
     app.on_callback_query(filters.regex(r'^(send_sequence|cancel_sequence)$'))(sequence_control_callback)
     app.on_callback_query(filters.regex(r'^ls_(chat|channel|close)_'))(ls_callback_handlers)
     
-    # Setup other handlers in correct order
-    setup_start_handlers(app)
-    setup_merging_handlers(app)  # Merging handlers
-    
     print("🤖 Bot starting with all features...")
     print("✅ Sequence mode loaded")
     print("✅ Merging mode loaded (via handler_merging)")
     print("✅ Start handlers loaded")
-    print("✅ All commands registered properly")
+    print("✅ All sequence commands registered")
     
     app.run()
 
 if __name__ == "__main__":
-    # Import filters here to avoid circular imports
-    from pyrogram import filters
     main()
