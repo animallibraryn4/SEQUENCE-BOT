@@ -13,8 +13,7 @@ else:
 import asyncio
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN
-import sequence  # This will register sequence handlers
-from handler_merging   # CHANGED: Import from handler_merging
+import sequence  # This will register sequence handlers   # CHANGED: Import from handler_merging
 from start import setup_start_handlers
 
 # Create the main bot client
