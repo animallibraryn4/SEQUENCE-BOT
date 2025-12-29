@@ -3,6 +3,16 @@ import asyncio
 import re
 import time
 import subprocess
+
+# Check if FFmpeg is available
+def check_ffmpeg_available():
+    """Check if FFmpeg is installed and available"""
+    try:
+        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+        return result.returncode == 0
+    except:
+        return False
+        
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import UserNotParticipant, FloodWait, ChatAdminRequired, ChannelPrivate
@@ -30,15 +40,6 @@ except ImportError as e:
 
 # Bot start time for uptime calculation
 BOT_START_TIME = time.time()
-
-# Check if FFmpeg is available
-def check_ffmpeg_available():
-    """Check if FFmpeg is installed and available"""
-    try:
-        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
-        return result.returncode == 0
-    except:
-        return False
 
 # --- REFINED PARSING ENGINE ---
 def parse_file_info(text):
@@ -858,3 +859,4 @@ def setup_sequence_handlers(client: Client):
 
 # Export the setup function
 __all__ = ['setup_sequence_handlers']
+
