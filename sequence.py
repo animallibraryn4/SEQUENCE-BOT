@@ -18,14 +18,6 @@ from start import is_subscribed, setup_start_handlers, set_bot_start_time
 # Bot start time for uptime calculation
 BOT_START_TIME = time.time()
 
-app = Client(
-    "sequence_bot", 
-    api_id=API_ID, 
-    api_hash=API_HASH, 
-    bot_token=BOT_TOKEN,
-    workdir="/content"
-)
-
 # --- REFINED PARSING ENGINE ---
 def parse_file_info(text):
     """Parse file information from text (either filename or caption)"""
@@ -874,16 +866,16 @@ async def sequence_control_callback(client, query):
         await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
 # ----------------------- MAIN ENTRY POINT -----------------------
-def main():
-    """Initialize and run the bot"""
-    # Set bot start time
-    set_bot_start_time()
-    
-    # Setup start handlers
-    setup_start_handlers(app)
-    
-    # Run the bot
-    app.run()
 
-if __name__ == "__main__":
-    main()
+__all__ = [
+    'quality_mode_cmd',
+    'ls_command', 
+    'start_sequence',
+    'store_file',
+    'mode_callback_handler',
+    'set_mode_callback',
+    'sequence_control_callback',
+    'ls_callback_handlers',
+    'handle_ls_links',
+    'switch_mode_cmd'
+]
