@@ -1,3 +1,14 @@
+import os
+import subprocess
+
+# Ye check karega ki mkvmerge installed hai ya nahi
+if os.system("mkvmerge --version") != 0:
+    print("mkvtoolnix nahi mila, install kar raha hoon...")
+    os.system("apt-get update && apt-get install -y mkvtoolnix")
+else:
+    print("mkvtoolnix pehle se installed hai.")
+
+
 import asyncio
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN
