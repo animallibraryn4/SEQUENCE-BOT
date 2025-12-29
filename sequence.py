@@ -1,3 +1,62 @@
+
+# Remove these imports from sequence.py:
+# try:
+#     from merging import (
+#         merging_command, 
+#         handle_merging_files, 
+#         process_merging_files,
+#         download_file,
+#         extract_audio_and_subtitles,
+#         user_merging_state,
+#         parse_file_info as merging_parse_file_info
+#     )
+#     MERGING_AVAILABLE = True
+#     if not check_ffmpeg_available():
+#         print("⚠️ FFmpeg is not available. Merging feature will be disabled.")
+#         MERGING_AVAILABLE = False
+# except ImportError as e:
+#     print(f"Merging module import error: {e}")
+#     MERGING_AVAILABLE = False
+#     user_merging_state = {}
+
+# Replace with just:
+MERGING_AVAILABLE = True  # or False if you want to disable merging
+
+# Remove this global variable:
+# user_merging_state = {}  # Remove this line
+
+# Remove the /merging command handler from sequence.py:
+# @app.on_message(filters.command("merging"))
+# async def merging_cmd(client, message):
+#     """Handle /merging command"""
+#     ... remove this entire function ...
+
+# Update the store_file function to remove merging check:
+@app.on_message(filters.document | filters.video | filters.audio)
+async def store_file(client, message):
+    # Remove the merging check from the beginning:
+    # if MERGING_AVAILABLE:
+    #     user_id = message.from_user.id
+    #     if user_id in user_merging_state:
+    #         # Handle as merging file
+    #         await handle_merging_files(client, message)
+    #         return
+    
+    # Check force subscribe
+    if not await is_subscribed(client, message):
+        return
+        
+    user_id = message.from_user.id
+    
+    # Rest of the function remains the same...
+    # ... (existing sequence logic)
+
+
+
+
+
+
+
 import asyncio
 import re
 import time
@@ -30,25 +89,7 @@ def check_ffmpeg_available():
     except:
         return False
 
-# Try to import merging module
-try:
-    from merging import (
-        merging_command, 
-        handle_merging_files, 
-        process_merging_files,
-        download_file,
-        extract_audio_and_subtitles,
-        user_merging_state,
-        parse_file_info as merging_parse_file_info
-    )
-    MERGING_AVAILABLE = True
-    if not check_ffmpeg_available():
-        print("⚠️ FFmpeg is not available. Merging feature will be disabled.")
-        MERGING_AVAILABLE = False
-except ImportError as e:
-    print(f"Merging module import error: {e}")
-    MERGING_AVAILABLE = False
-    user_merging_state = {}
+MERGING_AVAILABLE = True
 
 app = Client(
     "sequence_bot", 
@@ -960,4 +1001,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
