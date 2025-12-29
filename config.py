@@ -3,7 +3,7 @@
 
 API_ID = 22299340 # https://my.telegram.org
 API_HASH = "09b09f3e2ff1306da4a19888f614d937"# https://my.telegram.org
-BOT_TOKEN = ""# Form @BotFather
+BOT_TOKEN = "7673661228:AAH86JR5hTw_Ck9UI5zq0KQ8JnPTL2OVNoU"# Form @BotFather
 MONGO_URI = "mongodb+srv://mikota4432:jkJDQuZH6o8pxxZe@cluster0.2vngilq.mongodb.net/?retryWrites=true&w=majority"# Form https://www.mongodb.com
 START_PIC = "https://files.catbox.moe/d0kjfx.jpg" 
  
@@ -32,6 +32,7 @@ FSUB_CHANNEL_2 = -1001896877147
 FSUB_CHANNEL_3 = 0 
 
 OWNER_ID = 5380609667
+
 
 
 
