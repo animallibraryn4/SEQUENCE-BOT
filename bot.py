@@ -28,39 +28,61 @@ app = Client(
 def main():
     """Initialize and run the bot with all features"""
     
-    # IMPORTANT: Setup sequence handlers FIRST, before start handlers
-    # This ensures sequence callback handlers get called before the generic start handler
+    print("🤖 Bot starting with all features...")
     
-    # Register sequence command handlers
+    # Setup start handlers first (basic commands)
+    setup_start_handlers(app)
+    print("✅ Start handlers loaded")
+    
+    # Setup merging handlers SECOND
+    setup_merging_handlers(app)
+    print("✅ Merging mode loaded")
+    
+    # Register sequence command handlers THIRD
     app.on_message(filters.command("fileseq"))(quality_mode_cmd)
     app.on_message(filters.command("ls"))(ls_command)
     app.on_message(filters.command("sequence"))(start_sequence)
     app.on_message(filters.command("sf"))(switch_mode_cmd)
     
-    # Register file handler for sequence mode
-    app.on_message(filters.document | filters.video | filters.audio)(store_file)
+    # Register file handler for sequence mode - IMPORTANT: with specific filter
+    async def sequence_store_file(client, message):
+        # Only handle files if user is in sequence mode
+        user_id = message.from_user.id
+        if user_id in user_sequences:  # We'll need to import this
+            await store_file(client, message)
+    
+    # Import user_sequences here
+    from database import user_sequences
+    
+    # Register with filter that only catches files when user is in sequence mode
+    @app.on_message(filters.document | filters.video | filters.audio)
+    async def combined_file_handler(client, message):
+        user_id = message.from_user.id
+        
+        # First check if user is in merging mode
+        from merging import merging_users  # Import from merging.py
+        if user_id in merging_users:
+            # Let merging handle it
+            from handler_merging import handle_merging_files
+            await handle_merging_files(client, message)
+            return
+        
+        # Then check if user is in sequence mode
+        if user_id in user_sequences:
+            await store_file(client, message)
+            return
     
     # Register link handler for LS mode
     app.on_message(filters.text & filters.regex(r'https?://t\.me/'))(handle_ls_links)
     
-    # Register sequence callback handlers
+    # Register sequence callback handlers with specific filters
     app.on_callback_query(filters.regex(r'^mode_(file|caption)$|^close_mode$'))(mode_callback_handler)
     app.on_callback_query(filters.regex(r'^set_mode_(group|per_ep)$'))(set_mode_callback)
     app.on_callback_query(filters.regex(r'^(send_sequence|cancel_sequence)$'))(sequence_control_callback)
     app.on_callback_query(filters.regex(r'^ls_(chat|channel|close)_'))(ls_callback_handlers)
     
-    # Now setup start handlers (which has a generic callback handler)
-    setup_start_handlers(app)
-    
-    # Setup merging handlers
-    setup_merging_handlers(app)
-    
-    print("🤖 Bot starting with all features...")
     print("✅ Sequence mode loaded")
-    print("✅ Merging mode loaded (via handler_merging)")
-    print("✅ Start handlers loaded")
-    print("✅ All sequence commands registered")
-    print("✅ Callback handlers in correct order")
+    print("✅ All handlers registered")
     
     app.run()
 
