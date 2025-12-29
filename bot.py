@@ -1,20 +1,8 @@
-import os
-import subprocess
-
-# Ye check karega ki mkvmerge installed hai ya nahi
-if os.system("mkvmerge --version") != 0:
-    print("mkvtoolnix nahi mila, install kar raha hoon...")
-    os.system("apt-get update && apt-get install -y mkvtoolnix")
-else:
-    print("mkvtoolnix pehle se installed hai.")
-
-# Baaki ka purana code iske niche rahega...
-
 import asyncio
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN
 import sequence  # This will register sequence handlers
-from handler_merging import setup_merging_handlers  # CHANGED: Import from handler_merging
+from handler_merging import setup_merging_handlers
 from start import setup_start_handlers
 
 # Create the main bot client
@@ -29,9 +17,10 @@ app = Client(
 def main():
     """Initialize and run the bot with all features"""
     
-    # Setup all handlers
+    # Setup all handlers in correct order
     setup_start_handlers(app)
-    setup_merging_handlers(app)  # Now this imports from handler_merging.py
+    setup_merging_handlers(app)  # Merging handlers
+    # sequence handlers are already registered via import
     
     print("🤖 Bot starting with all features...")
     print("✅ Sequence mode loaded")
