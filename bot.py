@@ -1,5 +1,8 @@
 import os
 import subprocess
+import asyncio
+from pyrogram import Client
+from config import API_ID, API_HASH, BOT_TOKEN
 
 # Ye check karega ki mkvmerge installed hai ya nahi
 if os.system("mkvmerge --version") != 0:
@@ -8,15 +11,24 @@ if os.system("mkvmerge --version") != 0:
 else:
     print("mkvtoolnix pehle se installed hai.")
 
-import asyncio
-from pyrogram import Client
-from config import API_ID, API_HASH, BOT_TOKEN
+# Import handlers
 import sequence  # This will register sequence handlers
 from handler_merging import setup_merging_handlers
 from start import setup_start_handlers
 
+# Disable Pyrogram's interactive login
+os.environ['PYROGRAM_SESSION'] = 'non-interactive'
+
 async def main():
     """Initialize and run the bot with all features"""
+    
+    # Check if BOT_TOKEN is set
+    if not BOT_TOKEN or BOT_TOKEN == "":
+        print("❌ ERROR: BOT_TOKEN is empty!")
+        print("Please add your bot token to config.py")
+        return
+    
+    print(f"Using bot token: {BOT_TOKEN[:10]}...")  # Show first 10 chars
     
     # Create the main bot client
     app = Client(
@@ -24,7 +36,8 @@ async def main():
         api_id=API_ID,
         api_hash=API_HASH,
         bot_token=BOT_TOKEN,
-        workdir="/content"
+        workdir="/content",
+        in_memory=True  # Don't save session files
     )
     
     # Setup all handlers
