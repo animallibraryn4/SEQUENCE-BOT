@@ -1,3 +1,4 @@
+# [file name]: bot.py
 import os
 import subprocess
 
@@ -12,12 +13,10 @@ import asyncio
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN
 
-# Import sequence module to register handlers
-import sequence
-
 # Import handler setup functions
 from handler_merging import setup_merging_handlers
 from start import setup_start_handlers
+from sequence import setup_sequence_handlers  # NEW: Import sequence setup
 
 # Create the main bot client
 app = Client(
@@ -33,7 +32,8 @@ def main():
     
     # Setup all handlers
     setup_start_handlers(app)
-    setup_merging_handlers(app)  # Now this imports from handler_merging.py
+    setup_merging_handlers(app)
+    setup_sequence_handlers(app)  # NEW: Setup sequence handlers
     
     print("🤖 Bot starting with all features...")
     print("✅ Sequence mode loaded")
