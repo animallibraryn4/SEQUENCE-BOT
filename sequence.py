@@ -9,7 +9,26 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import UserNotParticipant, FloodWait, ChatAdminRequired, ChannelPrivate
 from config import API_HASH, API_ID, BOT_TOKEN, MONGO_URI, START_PIC, START_MSG, HELP_TXT, COMMAND_TXT, OWNER_ID, FSUB_CHANNEL, FSUB_CHANNEL_2, FSUB_CHANNEL_3
-
+# Try to import merging module
+try:
+    from merging import (
+        merging_command, 
+        handle_merging_files, 
+        process_merging_files,
+        download_file,
+        extract_audio_and_subtitles,
+        user_merging_state,
+        parse_file_info as merging_parse_file_info
+    )
+    MERGING_AVAILABLE = True
+    if not check_ffmpeg_available():
+        print("⚠️ FFmpeg is not available. Merging feature will be disabled.")
+        MERGING_AVAILABLE = False
+except ImportError as e:
+    print(f"Merging module import error: {e}")
+    MERGING_AVAILABLE = False
+    user_merging_state = {}
+    
 # Import from our split modules
 from database import (
     user_sequences, user_notification_msg, update_tasks, 
@@ -907,3 +926,4 @@ def setup_sequence_handlers(app):
             await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
     
+
