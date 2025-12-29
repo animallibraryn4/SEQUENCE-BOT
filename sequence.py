@@ -543,6 +543,7 @@ def setup_sequence_handlers(app):
             f"<blockquote>Send your files now</blockquote>"
         )
 
+
     # 🔥 MODIFIED FUNCTION: store_file - UPDATED WITH FIX AND MODE SUPPORT
     @app.on_message(filters.document | filters.video | filters.audio)
     async def store_file(client, message):
@@ -561,6 +562,28 @@ def setup_sequence_handlers(app):
         if not await is_subscribed(client, message):
             return
             
+        user_id = message.from_user.id
+
+    # 🔥 MODIFIED FUNCTION: store_file - UPDATED WITH FIX AND MODE SUPPORT
+    @app.on_message(filters.document | filters.video | filters.audio)
+    async def store_file(client, message):
+        # First check if user is in merging mode
+        if MERGING_AVAILABLE:
+            user_id = message.from_user.id
+            # Check if user is in merging mode
+            try:
+                from handler_merging import merging_users
+                if user_id in merging_users:
+                    # User is in merging mode, skip sequence processing
+                    # The merging handler will process this file separately
+                    return
+            except ImportError:
+                pass  # If we can't import, just continue with sequence mode
+    
+        # Check force subscribe
+        if not await is_subscribed(client, message):
+            return
+        
         user_id = message.from_user.id
         
         # Check if we are currently in a sequence session
@@ -892,6 +915,7 @@ def setup_sequence_handlers(app):
             await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
     
+
 
 
 
