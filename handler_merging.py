@@ -1,6 +1,3 @@
-
-
-
 import asyncio
 import tempfile
 import time
@@ -10,12 +7,12 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from config import OWNER_ID
 from start import is_subscribed
 
-# Import from merging.py with ALL global states
+# Import from merging.py
 from merging import (
     MergingState, merging_users, PROCESSING_STATES, LAST_EDIT_TIME,
     get_file_extension, match_files_by_episode, merge_audio_subtitles_simple,
     smart_progress_callback, cleanup_user_throttling,
-    get_merging_help_text, MERGE_TASKS, cleanup_merging_session
+    get_merging_help_text
 )
 
 async def start_merging_process(client: Client, state: MergingState, message: Message):
@@ -36,27 +33,26 @@ async def start_merging_process(client: Client, state: MergingState, message: Me
     # Store progress message reference in state
     state.progress_msg = progress_msg
     
-    # Start the merging process in background with TASK TRACKING
-    task = asyncio.create_task(process_merging(client, state, progress_msg))
-    MERGE_TASKS[user_id] = task  # 🔥 Store task reference for cancellation
+    # Start the merging process in background  
+    asyncio.create_task(process_merging(client, state, progress_msg))
 
 async def process_merging(client: Client, state: MergingState, progress_msg: Message):
     """Process the merging of all files with cancellation support"""
     user_id = state.user_id
     msg_id = progress_msg.id
     
-    try:
-        # Initialize processing state for this user
-        PROCESSING_STATES[user_id] = {
-            "cancelled": False,
-            "current_file": None,
-            "progress_msg_id": msg_id
-        }
-        
-        # Clear any previous edit time for this user
-        if user_id in LAST_EDIT_TIME:
-            del LAST_EDIT_TIME[user_id]
-        
+    # Initialize processing state for this user
+    PROCESSING_STATES[user_id] = {
+        "cancelled": False,
+        "current_file": None,
+        "progress_msg_id": msg_id
+    }
+    
+    # Clear any previous edit time for this user
+    if user_id in LAST_EDIT_TIME:
+        del LAST_EDIT_TIME[user_id]
+    
+    try:  
         # Create temporary directory  
         with tempfile.TemporaryDirectory() as temp_dir:  
             temp_path = Path(temp_dir)  
@@ -342,10 +338,10 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                         )  
                         print(f"Failed to merge file {idx}")  
                       
-                except asyncio.CancelledError:
+                except asyncio.CancelledError as e:
                     # User cancelled processing
                     print(f"Processing cancelled by user for file {idx}")
-                    raise  # Re-raise to exit loop
+                    raise e  # Re-raise to exit loop
                 except Exception as e:  
                     print(f"Error processing file {idx}: {str(e)}")  
                     await progress_msg.edit_text(  
@@ -372,15 +368,12 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
               
     except asyncio.CancelledError:
         # Handle cancellation
-        # Handle cancellation
         print(f"Merging cancelled for user {user_id}")
         await progress_msg.edit_text(  
             "<blockquote><b>❌ Processing Cancelled</b></blockquote>\n\n"  
             "<blockquote>🚫 Merging process was cancelled by user.</blockquote>\n"
             "<blockquote>Use <code>/merging</code> to start again.</blockquote>"  
         )
-        raise  # Re-raise to trigger cleanup in finally block
-        
     except Exception as e:  
         print(f"Merge process error: {str(e)}")  
         import traceback  
@@ -394,35 +387,16 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
             pass  
     
     finally:
-        # 🔥 CENTRAL CLEANUP - Guaranteed to run
-        await cleanup_merging_session(
-            user_id,
-            progress_msg,
-            reason="finished / crash / cancel"
-        )
+        # Clean up processing state
+        if user_id in PROCESSING_STATES:
+            del PROCESSING_STATES[user_id]
+        if user_id in LAST_EDIT_TIME:
+            del LAST_EDIT_TIME[user_id]
+        if user_id in merging_users:  
+            del merging_users[user_id]
 
 def setup_merging_handlers(app: Client):
     """Setup all merging-related handlers"""
-
-    @app.on_callback_query(filters.regex(r"^cancel_processing_(\d+)$"))
-    async def cancel_processing_callback(client, query):
-        user_id = int(query.data.split("_")[2])
-
-        # Security: user sirf apna hi process cancel kar sakta hai
-        if user_id != query.from_user.id:
-            await query.answer("Not allowed", show_alert=True)
-            return
-
-        # 🔔 Sirf CANCEL SIGNAL bhejo
-        if user_id in PROCESSING_STATES:
-            PROCESSING_STATES[user_id]["cancelled"] = True
-
-        task = MERGE_TASKS.get(user_id)
-        if task and not task.done():
-            task.cancel()
-
-        # ✅ Instant feedback (VERY IMPORTANT)
-        await query.answer("⏹️ Cancelling…", show_alert=False)    
     
     @app.on_message(filters.command("merging"))
     async def merging_command(client: Client, message: Message):
@@ -431,13 +405,6 @@ def setup_merging_handlers(app: Client):
             return
         
         user_id = message.from_user.id
-        
-        # Clean up any existing session first
-        if user_id in merging_users:
-            await cleanup_merging_session(
-                user_id,
-                reason="new session started"
-            )
         
         # Initialize merging state
         merging_users[user_id] = MergingState(user_id)
@@ -468,12 +435,12 @@ def setup_merging_handlers(app: Client):
         """Handle cancel button callback"""
         user_id = query.from_user.id
         
-        await cleanup_merging_session(
-            user_id,
-            query.message,
-            reason="cancel button"
-        )
+        if user_id in merging_users:
+            del merging_users[user_id]
         
+        await query.message.edit_text(
+            "<blockquote><b>❌ Merge process cancelled.</b></blockquote>"
+        )
         await query.answer("Merge cancelled")
     
     @app.on_message(filters.document | filters.video)
@@ -612,10 +579,10 @@ def setup_merging_handlers(app: Client):
             await start_merging_process(client, state, query.message)
             
         elif action == "cancel_merge":
-            await cleanup_merging_session(
-                user_id,
-                query.message,
-                reason="cancel callback"
+            if user_id in merging_users:
+                del merging_users[user_id]
+            await query.message.edit_text(
+                "<blockquote><b>❌ Merge process cancelled.</b></blockquote>"
             )
             await query.answer("Merge cancelled")
     
@@ -627,21 +594,15 @@ def setup_merging_handlers(app: Client):
         
         user_id = message.from_user.id
         
-        if user_id not in merging_users:
+        if user_id in merging_users:
+            del merging_users[user_id]
+            await message.reply_text(
+                "<blockquote><b>❌ Merge process cancelled.</b></blockquote>"
+            )
+        else:
             await message.reply_text(
                 "<blockquote>❌ No active merging session to cancel.</blockquote>"
             )
-            return
-        
-        # 🔥 REAL CANCELLATION - Uses central cleanup function
-        await cleanup_merging_session(
-            user_id,
-            reason="cancel command"
-        )
-        
-        await message.reply_text(
-            "<blockquote><b>❌ Merge process cancelled and cleaned up.</b></blockquote>"
-        )
     
     # Add cancel processing callback handler
     @app.on_callback_query(filters.regex(r"^cancel_processing_(\d+)$"))
@@ -653,14 +614,11 @@ def setup_merging_handlers(app: Client):
             await query.answer("You can only cancel your own processing!", show_alert=True)
             return
         
-        # 🔥 REAL CANCELLATION - Uses central cleanup function
-        await cleanup_merging_session(
-            user_id,
-            query.message,
-            reason="cancel button"
-        )
-        
-        await query.answer("⏹️ Processing cancelled", show_alert=True)
+        if user_id in PROCESSING_STATES:
+            PROCESSING_STATES[user_id]["cancelled"] = True
+            await query.answer("⏹️ Processing will be cancelled...", show_alert=True)
+        else:
+            await query.answer("No active processing to cancel", show_alert=True)
 
 # Export the setup function
 __all__ = ['setup_merging_handlers']
