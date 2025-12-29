@@ -289,28 +289,28 @@ def setup_sequence_handlers(app):
     
         await message.reply_text(response)
 
-@app.on_message(filters.command("testcmd"))
-async def test_commands(client, message):
-    """Test all major commands"""
-    test_results = []
+    @app.on_message(filters.command("testcmd"))
+    async def test_commands(client, message):
+        """Test all major commands"""
+        test_results = []
     
-    # Test 1: Check if handler is registered
-    test_results.append("1️⃣ Basic command response: ✅")
+        # Test 1: Check if handler is registered
+        test_results.append("1️⃣ Basic command response: ✅")
     
-    # Test 2: Check subscription
-    from start import is_subscribed
-    is_sub = await is_subscribed(client, message)
-    test_results.append(f"2️⃣ Force Subscribe check: {'✅ Pass' if is_sub else '❌ Blocked'}")
+        # Test 2: Check subscription
+        from start import is_subscribed
+        is_sub = await is_subscribed(client, message)
+        test_results.append(f"2️⃣ Force Subscribe check: {'✅ Pass' if is_sub else '❌ Blocked'}")
     
-    # Test 3: Check user data
-    from database import users_collection
-    user_data = users_collection.find_one({"user_id": message.from_user.id})
-    test_results.append(f"3️⃣ User data in DB: {'✅ Found' if user_data else '❌ Missing'}")
+        # Test 3: Check user data
+        from database import users_collection
+        user_data = users_collection.find_one({"user_id": message.from_user.id})
+        test_results.append(f"3️⃣ User data in DB: {'✅ Found' if user_data else '❌ Missing'}")
     
-    response = "🧪 **Command Test Results**\n\n"
-    response += "\n".join(test_results)
+        response = "🧪 **Command Test Results**\n\n"
+        response += "\n".join(test_results)
     
-    await message.reply_text(response)
+        await message.reply_text(response)
     
     # ----------------------- NEW: /sf COMMAND -----------------------
     @app.on_message(filters.command("sf"))
@@ -971,6 +971,7 @@ async def test_commands(client, message):
             await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
     
+
 
 
 
