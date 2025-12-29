@@ -5,6 +5,8 @@ from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from config import OWNER_ID
+# Import from start module
+from start import is_subscribed
 
 # Import from merging.py with ALL global states
 from merging import (
@@ -16,40 +18,6 @@ from merging import (
 
 # REMOVED: from start import is_subscribed    
 
-async def is_subscribed(client: Client, message: Message) -> bool:
-    """
-    Simplified force subscribe check for merging handler
-    Since start.py uses the app instance, we create our own version
-    """
-    from config import FSUB_CHANNEL, FSUB_CHANNEL_2, FSUB_CHANNEL_3
-    
-    # Filter out zero/empty channel IDs
-    channels = []
-    if FSUB_CHANNEL and FSUB_CHANNEL != 0:
-        channels.append(FSUB_CHANNEL)
-    if FSUB_CHANNEL_2 and FSUB_CHANNEL_2 != 0:
-        channels.append(FSUB_CHANNEL_2)
-    if FSUB_CHANNEL_3 and FSUB_CHANNEL_3 != 0:
-        channels.append(FSUB_CHANNEL_3)
-    
-    # If no channels are configured, allow access
-    if not channels:
-        return True
-    
-    user_id = message.from_user.id
-    
-    # Check each channel
-    for channel_id in channels:
-        try:
-            user = await client.get_chat_member(channel_id, user_id)
-            if user.status == "kicked":
-                await message.reply_text("<blockquote><b>❌ You are banned from using this bot.</b></blockquote>")
-                return False
-        except Exception:
-            # User not joined or any other error
-            continue
-            
-    return True
 
 async def start_merging_process(client: Client, state: MergingState, message: Message):
     """Start the merging process"""
