@@ -1,3 +1,10 @@
+
+# bot.py mein
+
+# Sabhi purane locks khatam
+    # ... baki setup ...
+
+
 import os
 import subprocess
 
@@ -16,6 +23,7 @@ from config import API_ID, API_HASH, BOT_TOKEN
 from handler_merging import setup_merging_handlers
 from start import setup_start_handlers
 from sequence import setup_sequence_handlers  # NEW: Import sequence setup
+from database import processing_users
 
 # Create the main bot client
 app = Client(
@@ -27,8 +35,7 @@ app = Client(
 )
 
 def main():
-    """Initialize and run the bot with all features"""
-    
+    processing_users.clear() 
     # Setup all handlers
     setup_start_handlers(app)
     setup_merging_handlers(app)
