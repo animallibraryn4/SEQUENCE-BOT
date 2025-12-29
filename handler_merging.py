@@ -4,7 +4,8 @@ import time
 from pathlib import Path
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from config import OWNER_ID
+from config import START_PIC, START_MSG, HELP_TXT, COMMAND_TXT, OWNER_ID, FSUB_CHANNEL, FSUB_CHANNEL_2, FSUB_CHANNEL_3
+
 
 # Import from merging.py with ALL global states
 from merging import (
