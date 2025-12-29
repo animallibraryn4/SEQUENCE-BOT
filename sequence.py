@@ -31,9 +31,20 @@ def check_ffmpeg_available():
     except:
         return False
 
-# Replace with:
-MERGING_AVAILABLE = True  # We'll check FFmpeg availability differently
-# Try to import merging module
+# MERGING AVAILABLE CHECK
+MERGING_AVAILABLE = True  # Default to True
+
+# FFmpeg check karein
+try:
+    result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+    if result.returncode == 0:
+        print("✅ FFmpeg available")
+    else:
+        print("⚠️ FFmpeg not available, merging disabled")
+        MERGING_AVAILABLE = False
+except:
+    print("⚠️ FFmpeg not available, merging disabled")
+    MERGING_AVAILABLE = False
 
 # --- REFINED PARSING ENGINE ---
 def parse_file_info(text):
@@ -920,6 +931,7 @@ def setup_sequence_handlers(app):
             await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
     
+
 
 
 
