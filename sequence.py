@@ -1,25 +1,22 @@
+
 import asyncio
 import re
 import time
-import os
-import sys
 import subprocess
-from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import UserNotParticipant, FloodWait, ChatAdminRequired, ChannelPrivate
 from config import API_HASH, API_ID, BOT_TOKEN, MONGO_URI, START_PIC, START_MSG, HELP_TXT, COMMAND_TXT, OWNER_ID, FSUB_CHANNEL, FSUB_CHANNEL_2, FSUB_CHANNEL_3
 
-# Import from our split modules
+# Import from our database module
 from database import (
     user_sequences, user_notification_msg, update_tasks, 
     user_settings, processing_users, user_ls_state,
-    users_collection, update_user_stats, get_user_mode, set_user_mode
+    users_collection, update_user_stats, get_user_mode, set_user_mode,
+    init_user_session, clear_user_session, get_user_sequence_count,
+    add_file_to_sequence, get_user_files_for_sending, has_active_sequence
 )
-from start import is_subscribed, setup_start_handlers, set_bot_start_time
-
-# Bot start time for uptime calculation
-BOT_START_TIME = time.time()
+from start import is_subscribed
 
 # Check if FFmpeg is available
 def check_ffmpeg_available():
@@ -50,6 +47,9 @@ except ImportError as e:
 # --- REFINED PARSING ENGINE ---
 def parse_file_info(text):
     """Parse file information from text (either filename or caption)"""
+    if not text:
+        return {"season": 1, "episode": 0, "quality": 0}
+    
     quality_match = re.search(r'(\d{3,4})[pP]', text)
     quality = int(quality_match.group(1)) if quality_match else 0
     clean_name = re.sub(r'\d{3,4}[pP]', '', text)
@@ -66,14 +66,9 @@ def parse_file_info(text):
 
     return {"season": season, "episode": episode, "quality": quality}
 
-# --- UPDATED: Extract message ID from Telegram link ---
+# --- Extract message ID from Telegram link ---
 def extract_message_info(link):
-    """
-    Extract chat ID and message ID from Telegram message link
-    Supports formats:
-    - https://t.me/c/chat_id/message_id (private channels)
-    - https://t.me/username/message_id (public channels/groups)
-    """
+    """Extract chat ID and message ID from Telegram message link"""
     try:
         link = link.strip()
         
@@ -81,17 +76,15 @@ def extract_message_info(link):
             # Private channel link format: https://t.me/c/1234567890/123
             parts = link.split("/")
             
-            # Get the chat_id part (it's 1234567890 in the example)
+            # Get the chat_id part
             chat_id_str = parts[4]
             
             # Check if it needs the -100 prefix
             if chat_id_str.startswith("-100"):
                 chat_id = int(chat_id_str)
             elif chat_id_str.startswith("100"):
-                # Some links might have 100xxxxxx format
                 chat_id = int("-" + chat_id_str)
             else:
-                # Regular negative ID for private channels
                 chat_id = int("-100" + chat_id_str)
             
             message_id = int(parts[5])
@@ -106,79 +99,33 @@ def extract_message_info(link):
             
     except Exception as e:
         print(f"Error parsing link {link}: {e}")
-        import traceback
-        traceback.print_exc()
         
     return None, None
 
-# --- UPDATED: Check if bot is admin in chat ---
+# --- Check if bot is admin in chat ---
 async def check_bot_admin(client, chat_id):
     """Check if bot is admin in the given chat/channel"""
     try:
-        print(f"Checking admin status for chat_id: {chat_id}, type: {type(chat_id)}")
-        
         # If chat_id is a username string, get the actual chat ID
         if isinstance(chat_id, str):
             try:
                 chat = await client.get_chat(chat_id)
                 chat_id = chat.id
-            except Exception as e:
-                print(f"Error getting chat from username {chat_id}: {e}")
+            except Exception:
                 return False
         
-        # Try to get chat info first
-        try:
-            chat = await client.get_chat(chat_id)
-            print(f"Chat title: {chat.title}, Chat type: {chat.type}")
-        except Exception as e:
-            print(f"Error getting chat info: {e}")
-        
         # Get bot's member status
-        try:
-            bot_member = await client.get_chat_member(chat_id, "me")
-            print(f"Bot status: {bot_member.status}, Status type: {type(bot_member.status)}")
+        bot_member = await client.get_chat_member(chat_id, "me")
+        status_str = str(bot_member.status).lower()
+        
+        # Check for admin status
+        admin_statuses = ["administrator", "creator", "admin"]
+        return any(status in status_str for status in admin_statuses)
             
-            # Check all possible admin status strings
-            admin_statuses = [
-                "administrator", 
-                "creator",
-                "Administrator",
-                "Creator",
-                "admin",
-                "Admin",
-                "chat_member_status_administrator",
-                "chat_member_status_creator"
-            ]
-            
-            # Also check if status is an object with attributes
-            status_str = str(bot_member.status).lower()
-            print(f"Status string: {status_str}")
-            
-            is_admin = False
-            for admin_status in admin_statuses:
-                if admin_status.lower() in status_str:
-                    is_admin = True
-                    break
-            
-            print(f"Is admin: {is_admin}")
-            return is_admin
-            
-        except (ChatAdminRequired, ChannelPrivate) as e:
-            print(f"Admin check failed (ChatAdminRequired/ChannelPrivate): {e}")
-            return False
-        except Exception as e:
-            print(f"Admin check error: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-            
-    except Exception as e:
-        print(f"General error in check_bot_admin: {e}")
-        import traceback
-        traceback.print_exc()
+    except (ChatAdminRequired, ChannelPrivate, Exception):
         return False
 
-# --- NEW: Get messages between two message IDs ---
+# --- Get messages between two message IDs ---
 async def get_messages_between(client, chat_id, start_msg_id, end_msg_id):
     """Fetch all messages between start_msg_id and end_msg_id (inclusive)"""
     messages = []
@@ -194,26 +141,21 @@ async def get_messages_between(client, chat_id, start_msg_id, end_msg_id):
                 msg = await client.get_messages(chat_id, msg_id)
                 if msg and (msg.document or msg.video or msg.audio):
                     messages.append(msg)
-                # Small delay to avoid flood
-                await asyncio.sleep(0.1)
-            except Exception as e:
-                print(f"Error fetching message {msg_id}: {e}")
+                await asyncio.sleep(0.05)  # Smaller delay
+            except Exception:
                 continue
     except Exception as e:
         print(f"Error in get_messages_between: {e}")
     
     return messages
 
-# --- UPDATED: Sequence files from messages with mode support ---
+# --- Sequence files from messages with mode support ---
 async def sequence_messages(client, messages, mode="per_ep", user_id=None):
     """Convert messages to sequence format with File/Caption mode support"""
     files_data = []
     
     # Get user's current mode
-    if user_id:
-        current_mode = get_user_mode(user_id)
-    else:
-        current_mode = "file"  # Default to file mode if no user_id provided
+    current_mode = get_user_mode(user_id) if user_id else "file"
     
     for msg in messages:
         file_obj = msg.document or msg.video or msg.audio
@@ -249,44 +191,48 @@ async def sequence_messages(client, messages, mode="per_ep", user_id=None):
 
 # --- SORTING ENGINE ---
 async def send_sequence_files(client, message, user_id):
-    if user_id not in user_sequences or not user_sequences[user_id]:
+    if not has_active_sequence(user_id):
         await message.edit_text("<blockquote>Nᴏ ғɪʟᴇs ɪɴ sᴇǫᴜᴇɴᴄᴇ!</blockquote>")
         return
 
-    files_data = user_sequences[user_id]
-    mode = user_settings.get(user_id, "per_ep")
+    # Get sorted files
+    sorted_files = get_user_files_for_sending(user_id)
+    
+    if not sorted_files:
+        await message.edit_text("<blockquote>Nᴏ ғɪʟᴇs ɪɴ sᴇǫᴜᴇɴᴄᴇ!</blockquote>")
+        return
+    
     await message.edit_text("<blockquote>📤 sᴇɴᴅɪɴɢ ғɪʟᴇs... ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ.</blockquote>")
 
-    if mode == "per_ep":
-        sorted_files = sorted(files_data, key=lambda x: (x["info"]["season"], x["info"]["episode"], x["info"]["quality"]))
-    else:
-        sorted_files = sorted(files_data, key=lambda x: (x["info"]["season"], x["info"]["quality"], x["info"]["episode"]))
-
+    success_count = 0
     for file in sorted_files:
         try:
             await client.copy_message(message.chat.id, from_chat_id=file["chat_id"], message_id=file["msg_id"])
+            success_count += 1
             await asyncio.sleep(0.8) 
-        except: 
+        except Exception:
             continue
 
-    update_user_stats(user_id, len(files_data), message.from_user.first_name)
+    # Update user stats
+    update_user_stats(user_id, success_count, message.from_user.first_name)
     
     try: 
         await message.delete()
     except: 
         pass
     
-    user_sequences.pop(user_id, None)
-    user_notification_msg.pop(user_id, None)
-    await client.send_message(message.chat.id, "<blockquote><b>✅ ᴀʟʟ ғɪʟᴇs sᴇǫᴜᴇɴᴄᴇᴅ ꜱᴜᴄᴄᴇꜱꜰᴜʟʟʏ!</b></blockquote>")
+    # Clear user session
+    clear_user_session(user_id)
+    await client.send_message(message.chat.id, f"<blockquote><b>✅ {success_count} ғɪʟᴇs sᴇǫᴜᴇɴᴄᴇᴅ ꜱᴜᴄᴄᴇꜱꜰᴜʟʟʏ!</b></blockquote>")
 
 # --- UPDATE NOTIFICATION FUNCTION ---
 async def update_notification(client, user_id, chat_id):
     await asyncio.sleep(3) 
-    if user_id not in user_sequences: 
+    
+    if not has_active_sequence(user_id): 
         return
     
-    count = len(user_sequences[user_id])
+    count = get_user_sequence_count(user_id)
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("Send", callback_data='send_sequence'), 
          InlineKeyboardButton("Cancel", callback_data='cancel_sequence')]
@@ -319,9 +265,9 @@ def setup_sequence_handlers(app: Client):
             return
             
         user_id = message.from_user.id
-        user_sequences[user_id] = []
-        if user_id in user_notification_msg:
-            del user_notification_msg[user_id]
+        
+        # Initialize user session
+        init_user_session(user_id)
         
         # Get current mode
         current_mode = get_user_mode(user_id)
@@ -410,14 +356,14 @@ def setup_sequence_handlers(app: Client):
         current_mode = get_user_mode(user_id)
         mode_text = "File mode" if current_mode == "file" else "Caption mode"
         
-        # Initialize LS state for user WITH mode information
+        # Initialize LS state for user
         user_ls_state[user_id] = {
             "step": 1,  # 1: waiting for first link, 2: waiting for second link
             "first_link": None,
             "first_chat": None,
             "first_msg_id": None,
             "mode": user_settings.get(user_id, "per_ep"),
-            "current_mode": current_mode  # Store user's File/Caption mode
+            "current_mode": current_mode
         }
         
         await message.reply_text(
@@ -439,14 +385,10 @@ def setup_sequence_handlers(app: Client):
         ls_data = user_ls_state[user_id]
         link = message.text.strip()
         
-        print(f"Received LS link: {link}, Step: {ls_data['step']}, Mode: {ls_data.get('current_mode', 'file')}")
-        
         try:
             if ls_data["step"] == 1:
                 # First link
                 chat_info, msg_id = extract_message_info(link)
-                
-                print(f"Extracted first link - Chat info: {chat_info}, Msg ID: {msg_id}")
                 
                 if not msg_id:
                     await message.reply_text("<blockquote>❌ Invalid link format. Please send a valid Telegram message link.</blockquote>")
@@ -473,35 +415,13 @@ def setup_sequence_handlers(app: Client):
                 # Second link
                 second_chat, second_msg_id = extract_message_info(link)
                 
-                print(f"Extracted second link - Chat info: {second_chat}, Msg ID: {second_msg_id}")
-                
                 if not second_msg_id:
                     await message.reply_text("<blockquote>❌ Invalid link format. Please send a valid Telegram message link.</blockquote>")
                     return
                 
                 # Check if both links are from same chat
-                print(f"Comparing: First chat: {ls_data['first_chat']} (type: {type(ls_data['first_chat'])}), "
-                      f"Second chat: {second_chat} (type: {type(second_chat)})")
-                
-                # Convert both to same type for comparison
                 first_chat = ls_data["first_chat"]
-                if isinstance(first_chat, int) and isinstance(second_chat, str):
-                    # Try to resolve the string to ID for comparison
-                    try:
-                        chat_obj = await client.get_chat(second_chat)
-                        second_chat = chat_obj.id
-                    except:
-                        pass
-                elif isinstance(first_chat, str) and isinstance(second_chat, int):
-                    # Try to resolve the int to username for comparison
-                    try:
-                        chat_obj = await client.get_chat(second_chat)
-                        if chat_obj.username:
-                            second_chat = chat_obj.username
-                    except:
-                        pass
-                
-                if first_chat != second_chat:
+                if str(first_chat) != str(second_chat):
                     await message.reply_text("<blockquote>❌ Both links must be from the same channel/group.</blockquote>")
                     # Reset LS state
                     del user_ls_state[user_id]
@@ -533,21 +453,17 @@ def setup_sequence_handlers(app: Client):
                 
         except Exception as e:
             print(f"Error handling LS link: {e}")
-            import traceback
-            traceback.print_exc()
             await message.reply_text("<blockquote>❌ An error occurred. Please try again with valid links.</blockquote>")
             if user_id in user_ls_state:
                 del user_ls_state[user_id]
 
-    # 🔥 MODIFIED FUNCTION: store_file - UPDATED WITH FIX AND MODE SUPPORT
+    # --- File storage handler ---
     @app.on_message(filters.document | filters.video | filters.audio)
     async def store_file(client, message):
         # First check if user is in merging mode
-        if MERGING_AVAILABLE:
-            user_id = message.from_user.id
-            if user_id in merging_users:
-                # The merging files will be handled by handler_merging.py
-                return
+        if MERGING_AVAILABLE and message.from_user.id in merging_users:
+            # The merging files will be handled by handler_merging.py
+            return
         
         # Check force subscribe
         if not await is_subscribed(client, message):
@@ -556,12 +472,12 @@ def setup_sequence_handlers(app: Client):
         user_id = message.from_user.id
         
         # Check if we are currently in a sequence session
-        if user_id in user_sequences:
+        if has_active_sequence(user_id) or user_id in user_sequences:
             file_obj = message.document or message.video or message.audio
             current_mode = get_user_mode(user_id)
             
             if current_mode == "caption":
-                # Caption mode: Use caption text or ask to switch mode
+                # Caption mode: Use caption text
                 if message.caption:
                     text_to_parse = message.caption
                 else:
@@ -578,19 +494,19 @@ def setup_sequence_handlers(app: Client):
             
             info = parse_file_info(text_to_parse)
             
-            user_sequences[user_id].append({
+            file_data = {
                 "filename": text_to_parse,
                 "msg_id": message.id,
                 "chat_id": message.chat.id,
                 "info": info
-            })
+            }
             
-            # Get current count
-            current_count = len(user_sequences[user_id])
+            # Add file to sequence
+            count = add_file_to_sequence(user_id, file_data)
 
-            # 🔥 Send "Processing" ONLY if 20+ files are added
-            if user_id not in user_notification_msg and user_id not in processing_users and current_count >= 20:
-                processing_users.add(user_id) # Lock the user
+            # Send "Processing" message if 20+ files are added
+            if user_id not in user_notification_msg and user_id not in processing_users and count >= 20:
+                processing_users.add(user_id)
                 try:
                     msg = await client.send_message(
                         message.chat.id,
@@ -601,9 +517,9 @@ def setup_sequence_handlers(app: Client):
                         "chat_id": message.chat.id
                     }
                 finally:
-                    processing_users.remove(user_id) # Release the lock
+                    processing_users.remove(user_id)
             
-            # Cancel previous update task and start a new one (Debouncing)
+            # Cancel previous update task and start a new one
             if user_id in update_tasks: 
                 if not update_tasks[user_id].done():
                     update_tasks[user_id].cancel()
@@ -654,7 +570,7 @@ def setup_sequence_handlers(app: Client):
                     await query.message.edit_text("<blockquote>❌ No files found between the specified links.</blockquote>")
                     return
                 
-                # Process and sequence files WITH user mode
+                # Process and sequence files
                 sorted_files, used_mode = await sequence_messages(client, messages, ls_data["mode"], target_user_id)
                 
                 if not sorted_files:
@@ -678,26 +594,27 @@ def setup_sequence_handlers(app: Client):
                 else:
                     await query.message.edit_text(f"<blockquote>📤 Sending {len(sorted_files)} files to chat... Please wait.</blockquote>")
                 
+                sent_count = 0
                 for file in sorted_files:
                     try:
                         await client.copy_message(user_id, from_chat_id=file["chat_id"], message_id=file["msg_id"])
+                        sent_count += 1
                         await asyncio.sleep(0.8)
-                    except Exception as e:
-                        print(f"Error sending file: {e}")
+                    except Exception:
                         continue
                 
                 # Update user stats
-                update_user_stats(user_id, len(sorted_files), query.from_user.first_name)
+                update_user_stats(user_id, sent_count, query.from_user.first_name)
                 
                 if skipped_count > 0:
                     await query.message.edit_text(
-                        f"<blockquote><b>✅ Successfully sent {len(sorted_files)} files to your chat!</b></blockquote>\n"
+                        f"<blockquote><b>✅ Successfully sent {sent_count} files to your chat!</b></blockquote>\n"
                         f"<blockquote>Mode: {mode_text}</blockquote>\n"
                         f"<blockquote>Note: {skipped_count} files skipped (no captions found)</blockquote>"
                     )
                 else:
                     await query.message.edit_text(
-                        f"<blockquote><b>✅ Successfully sent {len(sorted_files)} files to your chat!</b></blockquote>\n"
+                        f"<blockquote><b>✅ Successfully sent {sent_count} files to your chat!</b></blockquote>\n"
                         f"<blockquote>Mode: {mode_text}</blockquote>"
                     )
                 
@@ -716,38 +633,14 @@ def setup_sequence_handlers(app: Client):
                 # Check if bot is admin in the channel
                 chat_id = ls_data["first_chat"]
                 
-                # First, let's try to get chat info
-                try:
-                    chat = await client.get_chat(chat_id)
-                    await query.message.edit_text(f"<blockquote>Checking channel: {chat.title} ({chat_id})</blockquote>")
-                except Exception as e:
-                    await query.message.edit_text(f"<blockquote>Error getting channel info: {e}</blockquote>")
-                    return
-                
-                # Now check admin status
                 is_admin = await check_bot_admin(client, chat_id)
                 
                 if not is_admin:
-                    # Get more detailed info about the bot's status
-                    try:
-                        bot_member = await client.get_chat_member(chat_id, "me")
-                        status_info = f"Bot status: {bot_member.status}, Type: {type(bot_member.status)}"
-                        
-                        await query.message.edit_text(
-                            f"<blockquote><b>❌ Bot admin check failed!</b></blockquote>\n\n"
-                            f"<blockquote>Chat ID: {chat_id}\n"
-                            f"Chat Title: {chat.title}\n"
-                            f"Status: {status_info}\n\n"
-                            f"To send files back to the channel, the bot must be added as an administrator " 
-                            f"with permission to post messages.</blockquote>"
-                        )
-                    except Exception as e:
-                        await query.message.edit_text(
-                            f"<blockquote><b>❌ Bot is not admin in this channel!</b></blockquote>\n\n"
-                            f"<blockquote>Error checking status: {e}\n\n"
-                            f"To send files back to the channel, the bot must be added as an administrator "
-                            f"with permission to post messages.</blockquote>"
-                        )
+                    await query.message.edit_text(
+                        f"<blockquote><b>❌ Bot is not admin in this channel!</b></blockquote>\n\n"
+                        f"<blockquote>To send files back to the channel, the bot must be added as an administrator "
+                        f"with permission to post messages.</blockquote>"
+                    )
                     return
                 
                 await query.message.edit_text("<blockquote>✅ Bot is admin! Fetching files from channel... Please wait.</blockquote>")
@@ -763,7 +656,7 @@ def setup_sequence_handlers(app: Client):
                     await query.message.edit_text("<blockquote>❌ No files found between the specified links.</blockquote>")
                     return
                 
-                # Process and sequence files WITH user mode
+                # Process and sequence files
                 sorted_files, used_mode = await sequence_messages(client, messages, ls_data["mode"], target_user_id)
                 
                 if not sorted_files:
@@ -791,20 +684,12 @@ def setup_sequence_handlers(app: Client):
                 for file in sorted_files:
                     try:
                         await client.copy_message(chat_id, from_chat_id=file["chat_id"], message_id=file["msg_id"])
-                        
-                        # --- FIX FOR FloodWait Error: Increased delay and FloodWait handling ---
-                        await asyncio.sleep(2)  # Wait 2 seconds between sending files
-                        
-                    except FloodWait as e:
-                        # Telegram explicitly told us to wait. We must comply.
-                        print(f"FloodWait triggered. Sleeping for {e.value} seconds as requested by Telegram.")
-                        await asyncio.sleep(e.value)  # Wait for the exact required time
-                        
-                    except Exception as e:
-                        print(f"Non-FloodWait error sending file to channel: {e}")
-                        continue
-                    else:
                         success_count += 1
+                        await asyncio.sleep(2)  # Wait 2 seconds between sending files
+                    except FloodWait as e:
+                        await asyncio.sleep(e.value)
+                    except Exception:
+                        continue
                 
                 # Update user stats
                 update_user_stats(user_id, success_count, query.from_user.first_name)
@@ -828,8 +713,6 @@ def setup_sequence_handlers(app: Client):
                 
             except Exception as e:
                 print(f"LS Channel error: {e}")
-                import traceback
-                traceback.print_exc()
                 await query.message.edit_text(f"<blockquote>❌ An error occurred: {str(e)[:200]}...</blockquote>")
             
             # Clean up
@@ -867,10 +750,10 @@ def setup_sequence_handlers(app: Client):
         user_id = query.from_user.id
         
         if data == "send_sequence":
-            if user_id in user_sequences:
+            if has_active_sequence(user_id):
                 await send_sequence_files(client, query.message, user_id)
         elif data == "cancel_sequence":
-            user_sequences.pop(user_id, None)
+            clear_user_session(user_id)
             await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
     # ----------------------- MODE CALLBACK HANDLER -----------------------
@@ -924,3 +807,4 @@ def setup_sequence_handlers(app: Client):
 
 # Export the setup function
 __all__ = ['setup_sequence_handlers']
+#[file content end]
