@@ -906,21 +906,4 @@ def setup_sequence_handlers(app):
             user_sequences.pop(user_id, None)
             await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
-    # ----------------------- MERGING COMMAND HANDLER -----------------------
-    if MERGING_AVAILABLE:
-        @app.on_message(filters.command("merging"))
-        async def merging_cmd(client, message):
-            """Handle /merging command"""
-            if not await is_subscribed(client, message):
-                return
-            
-            if not MERGING_AVAILABLE:
-                await message.reply_text(
-                    "<blockquote>❌ Merging feature is not available.</blockquote>\n"
-                    "<blockquote>Reason: FFmpeg is required for audio/subtitle merging but is not installed on the server.</blockquote>"
-                )
-                return
-            
-            # Import merging command from handler_merging
-            from handler_merging import merging_command as merging_cmd_handler
-            await merging_cmd_handler(client, message)
+    
