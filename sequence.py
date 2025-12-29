@@ -547,6 +547,34 @@ def setup_sequence_handlers(app):
     @app.on_message(filters.document | filters.video | filters.audio)
     async def store_file(client, message):
         # First check if user is in merging mode
+        # Import directly from merging.py instead of handler_merging.py
+        if MERGING_AVAILABLE:
+            user_id = message.from_user.id
+        
+            # DIRECT IMPORT FROM merging.py (jahan actual state store hai)
+            try:
+                from merging import merging_users
+                if user_id in merging_users:
+                    # User merging mode mein hai, is file ko skip karo
+                    # merging.py ka handler ise apne aap handle karega
+                    print(f"User {user_id} merging mode mein hai, file skip")
+                    return
+            except ImportError as e:
+                print(f"Merging import error: {e}")
+                pass
+    
+        # Check force subscribe
+        if not await is_subscribed(client, message):
+            return
+        
+        user_id = message.from_user.id
+    
+    # Rest of your code...
+
+    # 🔥 MODIFIED FUNCTION: store_file - UPDATED WITH FIX AND MODE SUPPORT
+    @app.on_message(filters.document | filters.video | filters.audio)
+    async def store_file(client, message):
+        # First check if user is in merging mode
         if MERGING_AVAILABLE:
             user_id = message.from_user.id
             # Note: We need to import user_merging_state from handler_merging
@@ -892,6 +920,7 @@ def setup_sequence_handlers(app):
             await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
     
+
 
 
 
