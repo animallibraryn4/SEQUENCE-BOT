@@ -3,7 +3,6 @@ from pyrogram import Client, filters
 from config import API_ID, API_HASH, BOT_TOKEN
 from handler_merging import setup_merging_handlers
 from start import setup_start_handlers
-from file_handler import setup_file_handler
 from sequence import (
     quality_mode_cmd,
     ls_command,
@@ -15,6 +14,8 @@ from sequence import (
     handle_ls_links,
     switch_mode_cmd
 )
+from database import user_sequences
+from merging import merging_users
 
 # Create the main bot client
 app = Client(
@@ -24,6 +25,20 @@ app = Client(
     bot_token=BOT_TOKEN,
     workdir="/content"
 )
+
+# Global error handler for MESSAGE_NOT_MODIFIED
+@app.on_callback_query()
+async def global_error_handler(client, query):
+    """Global handler to catch and ignore MESSAGE_NOT_MODIFIED errors"""
+    try:
+        # Let other handlers process first
+        return
+    except Exception as e:
+        if "MESSAGE_NOT_MODIFIED" in str(e):
+            # Ignore this harmless error
+            pass
+        else:
+            raise e
 
 def main():
     """Initialize and run the bot with all features"""
@@ -38,8 +53,23 @@ def main():
     setup_merging_handlers(app)
     print("✅ Merging mode loaded")
     
-    # Setup file handler (routes files to correct mode)
-    setup_file_handler(app)
+    # Combined file handler
+    @app.on_message(filters.document | filters.video | filters.audio)
+    async def combined_file_handler(client, message):
+        user_id = message.from_user.id
+        
+        # Check if user is in merging mode
+        if user_id in merging_users:
+            from handler_merging import handle_merging_files
+            await handle_merging_files(client, message)
+            return
+        
+        # Check if user is in sequence mode
+        if user_id in user_sequences:
+            from sequence import store_file
+            await store_file(client, message)
+            return
+    
     print("✅ File handler loaded")
     
     # Register sequence command handlers
