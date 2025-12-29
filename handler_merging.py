@@ -677,5 +677,15 @@ def setup_merging_handlers(app: Client):
         
         await query.answer("⏹️ Processing cancelled", show_alert=True)
 
+
+# Export functions and variables that other modules might need
+def get_merging_state():
+    """Get merging state for other modules"""
+    return {
+        'merging_users': merging_users,
+        'PROCESSING_STATES': PROCESSING_STATES,
+        'MERGE_TASKS': MERGE_TASKS
+    }
+
 # Export the setup function
-__all__ = ['setup_merging_handlers']
+__all__ = ['setup_merging_handlers', 'get_merging_state']
