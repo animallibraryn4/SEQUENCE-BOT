@@ -563,13 +563,6 @@ async def start_sequence(client, message):
 # 🔥 MODIFIED FUNCTION: store_file - UPDATED WITH FIX AND MODE SUPPORT
 @app.on_message(filters.document | filters.video | filters.audio)
 async def store_file(client, message):
-    # First check if user is in merging mode
-    #if MERGING_AVAILABLE:
-        #user_id = message.from_user.id
-        #if user_id in user_merging_state:
-            # Handle as merging file
-           # await handle_merging_files(client, message)
-          #  return
     
     # Check force subscribe
     if not await is_subscribed(client, message):
@@ -922,6 +915,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
