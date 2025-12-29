@@ -1,4 +1,3 @@
-# [file name]: bot.py
 import os
 import subprocess
 
