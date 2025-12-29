@@ -1,23 +1,58 @@
 import os
-from flask import Flask
-import threading
 import subprocess
 
-app = Flask(__name__)
+# Check mkvmerge
+if os.system("mkvmerge --version") != 0:
+    print("mkvtoolnix nahi mila, install kar raha hoon...")
+    os.system("apt-get update && apt-get install -y mkvtoolnix")
+else:
+    print("mkvtoolnix pehle se installed hai.")
 
-@app.route("/")
-def index():
-    return "Bot is running with all features!"
+import asyncio
+from pyrogram import Client
+from config import API_ID, API_HASH, BOT_TOKEN
 
-# Use Render-assigned PORT, fallback to 10000
-port = int(os.environ.get("PORT", 10000))
+# Create the main bot client FIRST
+app = Client(
+    "sequence_bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+    workdir="/content"
+)
 
-def run_server():
-    app.run(host="0.0.0.0", port=port)
+def main():
+    """Initialize and run the bot with all features"""
+    
+    # Import and setup handlers AFTER creating app
+    from start import setup_start_handlers
+    from sequence import setup_sequence_handlers
+    
+    # Try to import merging handlers if available
+    try:
+        from handler_merging import setup_merging_handlers
+        MERGING_AVAILABLE = True
+    except ImportError as e:
+        print(f"Merging module not available: {e}")
+        MERGING_AVAILABLE = False
+    
+    # Setup all handlers
+    setup_start_handlers(app)
+    setup_sequence_handlers(app)
+    
+    if MERGING_AVAILABLE:
+        setup_merging_handlers(app)
+        print("✅ Merging mode loaded (via handler_merging)")
+    
+    print("🤖 Bot starting with all features...")
+    print("✅ Sequence mode loaded")
+    print("✅ Start handlers loaded")
+    
+    # Set bot start time
+    from start import set_bot_start_time
+    set_bot_start_time()
+    
+    app.run()
 
-# Start the web server in a separate thread
-threading.Thread(target=run_server, daemon=True).start()
-
-# Run your existing bot script as a subprocess
 if __name__ == "__main__":
-    subprocess.run(["python3", "bot.py"])
+    main()
