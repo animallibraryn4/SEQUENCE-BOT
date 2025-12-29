@@ -9,6 +9,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import UserNotParticipant, FloodWait, ChatAdminRequired, ChannelPrivate
 from config import API_HASH, API_ID, BOT_TOKEN, MONGO_URI, START_PIC, START_MSG, HELP_TXT, COMMAND_TXT, OWNER_ID, FSUB_CHANNEL, FSUB_CHANNEL_2, FSUB_CHANNEL_3
+from utils import parse_file_info, check_ffmpeg_available
 
 # Import from our split modules
 from database import (
@@ -22,13 +23,6 @@ from start import is_subscribed, setup_start_handlers, set_bot_start_time
 BOT_START_TIME = time.time()
 
 # Check if FFmpeg is available
-def check_ffmpeg_available():
-    """Check if FFmpeg is installed and available"""
-    try:
-        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
-        return result.returncode == 0
-    except:
-        return False
 
 # Global variable for merging availability
 MERGING_AVAILABLE = False
@@ -894,3 +888,4 @@ def setup_sequence_handlers(app):
         elif data == "cancel_sequence":
             user_sequences.pop(user_id, None)
             await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
+
