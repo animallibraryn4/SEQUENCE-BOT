@@ -623,12 +623,12 @@ async def start_sequence(client, message):
 @app.on_message(filters.document | filters.video | filters.audio)
 async def store_file(client, message):
     # First check if user is in merging mode
-    if MERGING_AVAILABLE:
-        user_id = message.from_user.id
-        if user_id in user_merging_state:
+    #if MERGING_AVAILABLE:
+        #user_id = message.from_user.id
+        #if user_id in user_merging_state:
             # Handle as merging file
-            await handle_merging_files(client, message)
-            return
+           # await handle_merging_files(client, message)
+          #  return
     
     # Check force subscribe
     if not await is_subscribed(client, message):
@@ -966,26 +966,6 @@ async def sequence_control_callback(client, query):
         user_sequences.pop(user_id, None)
         await query.message.edit_text("<blockquote>Sequence cancelled.</blockquote>")
 
-# ----------------------- MERGING CALLBACK HANDLER -----------------------
-@app.on_callback_query(filters.regex(r'^merging_'))
-async def handle_merging_callbacks(client, query):
-    """Handle merging callbacks"""
-    if not MERGING_AVAILABLE:
-        await query.answer("Merging feature not available", show_alert=True)
-        return
-    
-    data = query.data
-    
-    # Extract the callback type
-    if data.startswith("merging_done_source_"):
-        target_user_id = int(data.split("_")[3])    
-
-        if target_user_id not in user_merging_state:
-            await query.answer("Session expired. Please start again.", show_alert=True)
-            return
-        
-        # Add your merging logic here...
-        await query.answer("Processing...")
 
 # ----------------------- MAIN ENTRY POINT -----------------------
 def main():
@@ -1001,5 +981,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
