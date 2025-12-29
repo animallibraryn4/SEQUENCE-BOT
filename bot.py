@@ -1,45 +1,23 @@
 import os
+from flask import Flask
+import threading
 import subprocess
 
-# MKVToolNix check
-if os.system("mkvmerge --version") != 0:
-    print("mkvtoolnix nahi mila, install kar raha hoon...")
-    os.system("apt-get update && apt-get install -y mkvtoolnix")
-else:
-    print("mkvtoolnix pehle se installed hai.")
+app = Flask(__name__)
 
-# FFmpeg check bhi karo
-if os.system("ffmpeg -version") != 0:
-    print("⚠️ FFmpeg not found, merging may not work properly")
+@app.route("/")
+def index():
+    return "Bot is running with all features!"
 
-import asyncio
-from pyrogram import Client
-from config import API_ID, API_HASH, BOT_TOKEN
-from handlers import setup_all_handlers  # Unified handler setup
-from start import set_bot_start_time
+# Use Render-assigned PORT, fallback to 10000
+port = int(os.environ.get("PORT", 10000))
 
-# Create the main bot client
-app = Client(
-    "sequence_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-    workdir="/content"
-)
+def run_server():
+    app.run(host="0.0.0.0", port=port)
 
-def main():
-    """Initialize and run the bot with all features"""
-    
-    # Setup all handlers ek saath
-    setup_all_handlers(app)
-    
-    # Set bot start time for uptime tracking
-    set_bot_start_time()
-    
-    print("🤖 Bot starting with all features...")
-    print("✅ All handlers loaded successfully")
-    
-    app.run()
+# Start the web server in a separate thread
+threading.Thread(target=run_server, daemon=True).start()
 
+# Run your existing bot script as a subprocess
 if __name__ == "__main__":
-    main()
+    subprocess.run(["python3", "bot.py"])
