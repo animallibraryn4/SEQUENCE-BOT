@@ -27,11 +27,12 @@ COMMAND_TXT = """<b>🛠️ Bot Commands List</b>
 • /sf - Switch between File mode and Caption mode</blockquote>"""
 
 # --- FORCE SUBSCRIBE CONFIG ---
-FSUB_CHANNEL = -1002263636517 #If you don’t want to use it, you can turn it off by setting it to 0
-FSUB_CHANNEL_2 = -1001896877147
+FSUB_CHANNEL = 0 #If you don’t want to use it, you can turn it off by setting it to 0
+FSUB_CHANNEL_2 = 0
 FSUB_CHANNEL_3 = 0 
 
 OWNER_ID = 5380609667
+
 
 
 
