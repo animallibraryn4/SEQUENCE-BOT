@@ -17,7 +17,7 @@ from handler_merging import setup_merging_handlers
 from start import setup_start_handlers
 
 # Disable Pyrogram's interactive login
-os.environ['PYROGRAM_SESSION'] = 'non-interactive'
+
 
     # Create the main bot client
     app = Client(
