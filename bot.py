@@ -1,10 +1,4 @@
 
-# bot.py mein
-
-# Sabhi purane locks khatam
-    # ... baki setup ...
-
-
 import os
 import subprocess
 
@@ -15,15 +9,14 @@ if os.system("mkvmerge --version") != 0:
 else:
     print("mkvtoolnix pehle se installed hai.")
 
+# Baaki ka purana code iske niche rahega...
+
 import asyncio
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN
-
-# Import handler setup functions
-from handler_merging import setup_merging_handlers
+from sequence import setup_sequence_handlers  # CHANGED: Import the setup function
+from handler_merging import setup_merging_handlers  # CHANGED: Import from handler_merging
 from start import setup_start_handlers
-from sequence import setup_sequence_handlers  # NEW: Import sequence setup
-from database import processing_users
 
 # Create the main bot client
 app = Client(
@@ -35,11 +28,12 @@ app = Client(
 )
 
 def main():
-    processing_users.clear() 
+    """Initialize and run the bot with all features"""
+    
     # Setup all handlers
     setup_start_handlers(app)
-    setup_merging_handlers(app)
-    setup_sequence_handlers(app)  # NEW: Setup sequence handlers
+    setup_sequence_handlers(app)  # CHANGED: Setup sequence handlers
+    setup_merging_handlers(app)  # Now this imports from handler_merging.py
     
     print("🤖 Bot starting with all features...")
     print("✅ Sequence mode loaded")
@@ -50,3 +44,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+[file content end]
