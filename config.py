@@ -4,7 +4,7 @@
 API_ID = 22299340 # https://my.telegram.org
 API_HASH = "09b09f3e2ff1306da4a19888f614d937"# https://my.telegram.org
 BOT_TOKEN = ""# Form @BotFather
-MONGO_URI = "mongodb+srv://pubg24:Nikhil109020@cluster0.mk8vn.mongodb.net/?retryWrites=true&w=majority"# Form https://www.mongodb.com
+MONGO_URI = "mongodb+srv://mikota4432:jkJDQuZH6o8pxxZe@cluster0.2vngilq.mongodb.net/?retryWrites=true&w=majority"# Form https://www.mongodb.com
 START_PIC = "https://files.catbox.moe/d0kjfx.jpg" 
  
 START_MSG = """<blockquote><b>✨ Hey there!</b></blockquote>
@@ -32,6 +32,7 @@ FSUB_CHANNEL_2 = 0
 FSUB_CHANNEL_3 = 0 
 
 OWNER_ID = 5380609667
+
 
 
 
