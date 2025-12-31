@@ -7,7 +7,7 @@ import json
 import time
 import math
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from config import OWNER_ID
@@ -32,6 +32,7 @@ class MergingState:
         self.state = "waiting_for_source"  # waiting_for_source, waiting_for_target, processing
         self.current_processing = 0
         self.total_files = 0
+        self.progress_msg = None  # Store progress message reference
 
 def silent_cleanup(*file_paths):
     """
@@ -56,34 +57,33 @@ def silent_cleanup(*file_paths):
 def get_merging_help_text() -> str:
     """Get help text for merging commands"""
     return """
-<blockquote><b>🔧 Optimized Auto File Merging Commands</b></blockquote>
+<blockquote><b>🔧 Auto File Merging Commands</b></blockquote>
 
-<blockquote><b>/merging</b> - Start optimized file merging process
+<blockquote><b>/merging</b> - Start auto file merging process
 <b>/done</b> - Proceed to next step after sending files
 <b>/cancel_merge</b> - Cancel current merging process</blockquote>
 
 <blockquote><b>📝 How to use:</b>
 1. Send <code>/merging</code>
-2. Send all SOURCE files (base video files)
+2. Send all SOURCE files (with desired audio/subtitle tracks)
 3. Send <code>/done</code>
-4. Send all TARGET files (with audio/subtitles to extract)
+4. Send all TARGET files (to add tracks to)
 5. Send <code>/done</code> again
-6. Wait for optimized processing</blockquote>
+6. Wait for processing to complete</blockquote>
 
-<blockquote><b>⚡ OPTIMIZED WORKFLOW:</b>
-- ✅ Target file deleted immediately after extraction
-- ✅ Audio compressed if >20MB using Opus/AAC
-- ✅ Tracks re-encoded to match source specifications
-- ✅ Storage efficient with minimal temp files
-- ✅ 20MB strict size limit for audio tracks
-- ✅ Opus codec for best quality at small sizes</blockquote>
+<blockquote><b>🎯 NEW: Optimized Workflow</b>
+- ✅ Extract tracks first, delete source to save space
+- ✅ Smart compression (30MB limit)
+- ✅ Target analysis before re-encoding
+- ✅ Target original audio preserved
+- ✅ Automatic cleanup</blockquote>
 
 <blockquote><b>⚠️ Important Notes:</b>
 - Files are matched by season and episode numbers
-- <b>MKV/MP4 format works best</b>
-- Long audio tracks (>2 hours) will be compressed
-- Original source file quality preserved
-- Server needs ffmpeg with Opus/AAC support</blockquote>"""
+- <b>MKV format works best</b>
+- Original target file tracks are preserved
+- Only new audio/subtitle tracks are added from source
+- Server needs FFmpeg installed</blockquote>"""
     
 # --- PROGRESS BAR SYSTEM (MULTI-USER SAFE) ---
 def make_bar(percent, length=16):
@@ -163,11 +163,6 @@ async def smart_progress_callback(current, total, msg, start_time, stage, filena
         # If message was deleted or other error, skip updating last edit time
         pass
 
-# Simple version for single-user scenarios (backward compatibility)
-async def progress_callback(current, total, msg, start_time, stage, filename):
-    """Simple progress callback (no throttling, for backward compatibility)"""
-    return await smart_progress_callback(current, total, msg, start_time, stage, filename, 0, None)
-
 # Cleanup function to remove user from throttling system
 def cleanup_user_throttling(user_id):
     """Remove user from throttling system when done"""
@@ -190,19 +185,14 @@ def parse_episode_info(filename: str) -> Dict:
     episode = None
 
     patterns = [
-
         # S01E01, S1 E1, S01-E01
         r's\s*(\d{1,2})\s*e\s*(\d{1,3})',
-
         # S1 - 01, S01 01, S2_12
         r's\s*(\d{1,2})\s*[- ]\s*(\d{1,3})',
-
         # Season 1 Episode 01
         r'season\s*(\d{1,2})\s*(?:episode|ep)?\s*(\d{1,3})',
-
         # 1x01
         r'(\d{1,2})\s*x\s*(\d{1,3})',
-
         # Episode 01, EP01, E01
         r'(?:episode|ep|e)\s*(\d{1,3})',
     ]
@@ -264,7 +254,7 @@ def match_files_by_episode(source_files: List[Dict], target_files: List[Dict]) -
     
     return matched_pairs
 
-# --- IMPROVED FFMPEG UTILITIES ---
+# --- NEW: TARGET ANALYSIS & TRACK EXTRACTION ---
 def get_media_info(file_path: str) -> Dict:
     """Get detailed media information using ffprobe"""
     cmd = [
@@ -299,6 +289,9 @@ def extract_streams_info(media_info: Dict) -> Dict:
                 "codec": stream.get("codec_name"),
                 "language": stream.get("tags", {}).get("language", "und"),
                 "channels": stream.get("channels", 2),
+                "sample_rate": stream.get("sample_rate", 48000),
+                "bit_rate": stream.get("bit_rate", "128000"),
+                "duration": stream.get("duration", 0),
                 "title": stream.get("tags", {}).get("title", "")
             }
             audio_streams.append(audio_info)
@@ -318,7 +311,350 @@ def extract_streams_info(media_info: Dict) -> Dict:
         "total_streams": len(media_info.get("streams", []))
     }
 
-# ... (rest of the existing functions remain the same) ...
+def analyze_target_specs(file_path: str) -> Dict:
+    """Analyze target file specifications for re-encoding"""
+    info = get_media_info(file_path)
+    
+    target_specs = {
+        "format": info.get("format", {}).get("format_name", "matroska"),
+        "duration": float(info.get("format", {}).get("duration", 0)),
+        "size": int(info.get("format", {}).get("size", 0)),
+        "audio_codec": None,
+        "audio_bitrate": 192000,
+        "audio_channels": 2,
+        "audio_sample_rate": 48000
+    }
+    
+    # Find audio stream specs
+    for stream in info.get("streams", []):
+        if stream.get("codec_type") == "audio":
+            target_specs["audio_codec"] = stream.get("codec_name", "aac")
+            target_specs["audio_bitrate"] = int(stream.get("bit_rate", 192000))
+            target_specs["audio_channels"] = stream.get("channels", 2)
+            target_specs["audio_sample_rate"] = int(stream.get("sample_rate", 48000))
+            break
+    
+    return target_specs
+
+def extract_tracks_from_source(source_path: str, temp_dir: Path) -> Dict:
+    """Extract audio and subtitle tracks from source file"""
+    extracted_tracks = {
+        "audio_files": [],
+        "subtitle_files": [],
+        "success": False
+    }
+    
+    try:
+        # Get source info
+        source_info = get_media_info(source_path)
+        streams_info = extract_streams_info(source_info)
+        
+        print(f"Extracting {len(streams_info['audio_streams'])} audio tracks and "
+              f"{len(streams_info['subtitle_streams'])} subtitle tracks from source")
+        
+        # Extract audio tracks
+        for idx, audio_info in enumerate(streams_info["audio_streams"]):
+            audio_output = temp_dir / f"audio_{idx}_{audio_info['language']}.m4a"
+            
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", source_path,
+                "-map", f"0:a:{idx}",
+                "-c:a", "copy",
+                str(audio_output)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                extracted_tracks["audio_files"].append({
+                    "path": str(audio_output),
+                    "index": idx,
+                    "language": audio_info["language"],
+                    "codec": audio_info["codec"],
+                    "original_bitrate": audio_info.get("bit_rate", "128000")
+                })
+                print(f"  ✓ Extracted audio track {idx+1} ({audio_info['language']})")
+        
+        # Extract subtitle tracks
+        for idx, sub_info in enumerate(streams_info["subtitle_streams"]):
+            sub_output = temp_dir / f"subtitle_{idx}_{sub_info['language']}.srt"
+            
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", source_path,
+                "-map", f"0:s:{idx}",
+                str(sub_output)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                extracted_tracks["subtitle_files"].append({
+                    "path": str(sub_output),
+                    "index": idx,
+                    "language": sub_info["language"],
+                    "codec": sub_info["codec"]
+                })
+                print(f"  ✓ Extracted subtitle track {idx+1} ({sub_info['language']})")
+        
+        extracted_tracks["success"] = True
+        
+    except Exception as e:
+        print(f"Error extracting tracks: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return extracted_tracks
+
+def calculate_bitrate_for_size(file_path: str, target_size_mb: int = 30) -> int:
+    """Calculate appropriate bitrate to keep file under target size"""
+    try:
+        info = get_media_info(file_path)
+        duration = float(info.get("format", {}).get("duration", 0))
+        
+        if duration <= 0:
+            return 128000  # Default
+        
+        # Calculate bitrate in bits per second
+        # target_size_mb * 8 * 1024 * 1024 = bits
+        # divided by duration = bits per second
+        target_bitrate = int((target_size_mb * 8 * 1024 * 1024) / duration)
+        
+        # Apply reasonable limits
+        if target_bitrate < 64000:  # Minimum 64kbps
+            return 64000
+        elif target_bitrate > 320000:  # Maximum 320kbps
+            return 320000
+        else:
+            return target_bitrate
+            
+    except Exception as e:
+        print(f"Error calculating bitrate: {e}")
+        return 128000  # Fallback
+
+def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: str) -> bool:
+    """Re-encode audio to match target specifications"""
+    try:
+        # Get audio file size
+        file_size = os.path.getsize(audio_path) / (1024 * 1024)  # MB
+        print(f"Audio file size: {file_size:.2f} MB")
+        
+        # Calculate appropriate bitrate
+        if file_size > 30:  # If audio track > 30MB
+            print(f"Audio track exceeds 30MB ({file_size:.2f} MB), compressing...")
+            target_bitrate = calculate_bitrate_for_size(audio_path, 30)
+            print(f"Using compressed bitrate: {target_bitrate} bps")
+        else:
+            # Use target's bitrate or original if smaller
+            target_bitrate = target_specs.get("audio_bitrate", 192000)
+            print(f"Using target bitrate: {target_bitrate} bps")
+        
+        # Choose codec based on target
+        target_codec = target_specs.get("audio_codec", "aac")
+        if target_codec.lower() not in ["aac", "opus", "mp3"]:
+            target_codec = "aac"  # Default to AAC for compatibility
+        
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", audio_path,
+            "-c:a", target_codec,
+            "-b:a", str(target_bitrate),
+            "-ar", str(target_specs.get("audio_sample_rate", 48000)),
+            "-ac", str(target_specs.get("audio_channels", 2)),
+            "-vn",  # No video
+            "-sn",  # No subtitles
+            output_path
+        ]
+        
+        print(f"Re-encoding command: {' '.join(cmd)}")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            new_size = os.path.getsize(output_path) / (1024 * 1024)
+            print(f"Re-encoded audio: {new_size:.2f} MB (compression: {(file_size - new_size)/file_size*100:.1f}%)")
+            return True
+        else:
+            print(f"Re-encoding failed: {result.stderr[:500]}")
+            return False
+            
+    except Exception as e:
+        print(f"Error re-encoding audio: {e}")
+        return False
+
+def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_path: str) -> bool:
+    """Merge re-encoded tracks into target file"""
+    try:
+        # Get target info
+        target_info = get_media_info(target_path)
+        target_streams = extract_streams_info(target_info)
+        
+        # Build ffmpeg command
+        inputs = [target_path]
+        maps = ["-map", "0:v"]  # Target video
+        
+        # Map target audio (original - will be preserved)
+        for i in range(len(target_streams["audio_streams"])):
+            maps.extend(["-map", f"0:a:{i}"])
+        
+        # Add re-encoded audio tracks
+        audio_idx = 1
+        for audio_track in reencoded_tracks.get("audio_files", []):
+            if os.path.exists(audio_track["path"]):
+                inputs.append(audio_track["path"])
+                maps.extend(["-map", f"{audio_idx}:a:0"])
+                audio_idx += 1
+        
+        # Map target subtitles
+        for i in range(len(target_streams["subtitle_streams"])):
+            maps.extend(["-map", f"0:s:{i}"])
+        
+        # Add extracted subtitle tracks
+        sub_idx = audio_idx
+        for sub_track in reencoded_tracks.get("subtitle_files", []):
+            if os.path.exists(sub_track["path"]):
+                inputs.append(sub_track["path"])
+                maps.extend(["-map", f"{sub_idx}:s:0"])
+                sub_idx += 1
+        
+        # Build final command
+        cmd = ["ffmpeg", "-y"]
+        
+        # Add all inputs
+        for input_file in inputs:
+            cmd.extend(["-i", input_file])
+        
+        # Add maps
+        cmd.extend(maps)
+        
+        # Video settings - copy unchanged
+        cmd.extend([
+            "-c:v", "copy",
+        ])
+        
+        # Audio settings - copy all (already re-encoded)
+        cmd.extend(["-c:a", "copy"])
+        
+        # Subtitle settings - copy all
+        cmd.extend(["-c:s", "copy"])
+        
+        # Set source audio as default, target audio as non-default
+        total_target_audio = len(target_streams["audio_streams"])
+        if total_target_audio > 0:
+            cmd.extend(["-disposition:a:0", "0"])  # Target audio not default
+        if len(reencoded_tracks.get("audio_files", [])) > 0:
+            cmd.extend([f"-disposition:a:{total_target_audio}", "default"])  # First source audio default
+        
+        # Container optimizations
+        cmd.extend([
+            "-movflags", "+faststart",
+            "-max_interleave_delta", "0",
+        ])
+        
+        cmd.append(output_path)
+        
+        print(f"Merging command: {' '.join(cmd[:50])}...")  # Truncate for display
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print("Merge successful")
+            return True
+        else:
+            print(f"Merge failed: {result.stderr[:500]}")
+            return False
+            
+    except Exception as e:
+        print(f"Error merging tracks: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+# Main optimized merging function
+def optimized_merge(source_path: str, target_path: str, output_path: str) -> bool:
+    """
+    Optimized merging workflow:
+    1. Extract tracks from source
+    2. Delete source
+    3. Analyze target specs
+    4. Re-encode tracks to match target
+    5. Merge with target
+    6. Cleanup temp files
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        
+        try:
+            print(f"\n=== STARTING OPTIMIZED MERGE ===")
+            print(f"Source: {os.path.basename(source_path)}")
+            print(f"Target: {os.path.basename(target_path)}")
+            
+            # STEP 1: Extract tracks from source
+            print("\n1. Extracting tracks from source...")
+            extracted_tracks = extract_tracks_from_source(source_path, temp_path)
+            
+            if not extracted_tracks["success"]:
+                print("Failed to extract tracks from source")
+                return False
+            
+            # STEP 2: Delete source file immediately
+            print("\n2. Deleting source file to save space...")
+            silent_cleanup(source_path)
+            
+            # STEP 3: Analyze target specifications
+            print("\n3. Analyzing target file specifications...")
+            target_specs = analyze_target_specs(target_path)
+            print(f"   Target specs: {target_specs}")
+            
+            # STEP 4: Re-encode extracted tracks
+            print("\n4. Re-encoding extracted tracks...")
+            reencoded_tracks = {
+                "audio_files": [],
+                "subtitle_files": []
+            }
+            
+            # Re-encode audio tracks
+            for audio_track in extracted_tracks["audio_files"]:
+                reencoded_path = temp_path / f"reencoded_{os.path.basename(audio_track['path'])}"
+                
+                if reencode_audio_for_target(audio_track["path"], target_specs, str(reencoded_path)):
+                    reencoded_tracks["audio_files"].append({
+                        "path": str(reencoded_path),
+                        "language": audio_track["language"]
+                    })
+                    # Delete original extracted audio
+                    silent_cleanup(audio_track["path"])
+                else:
+                    print(f"Failed to re-encode audio track {audio_track['language']}")
+            
+            # Copy subtitle tracks (no re-encoding needed)
+            for sub_track in extracted_tracks["subtitle_files"]:
+                reencoded_tracks["subtitle_files"].append(sub_track)
+            
+            # STEP 5: Merge re-encoded tracks into target
+            print("\n5. Merging tracks into target file...")
+            success = merge_tracks_into_target(target_path, reencoded_tracks, output_path)
+            
+            # STEP 6: Cleanup all temporary files
+            print("\n6. Cleaning up temporary files...")
+            cleanup_count = 0
+            
+            # Cleanup re-encoded audio files
+            for audio_track in reencoded_tracks["audio_files"]:
+                cleanup_count += silent_cleanup(audio_track["path"])
+            
+            # Cleanup subtitle files
+            for sub_track in reencoded_tracks["subtitle_files"]:
+                cleanup_count += silent_cleanup(sub_track["path"])
+            
+            print(f"   Cleaned up {cleanup_count} temporary files")
+            
+            return success
+            
+        except Exception as e:
+            print(f"Error in optimized merge: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
 def get_file_extension(file_path: str) -> str:
     """Get file extension from path"""
@@ -326,33 +662,6 @@ def get_file_extension(file_path: str) -> str:
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Simple merge function - Uses v2 method with MX Player fixes
-    Makes source audio default, keeps target audio but not default
+    Main merge function - Uses optimized workflow
     """
-    try:
-        print(f"\n=== Starting Simple Merge ===")
-        
-        # Get media info
-        target_info = get_media_info(target_path)
-        source_info = get_media_info(source_path)
-        
-        target_streams = extract_streams_info(target_info)
-        source_streams = extract_streams_info(source_info)
-        
-        print(f"Target audio streams: {len(target_streams['audio_streams'])}")
-        print(f"Source audio streams: {len(source_streams['audio_streams'])}")
-        
-        # Check if we have anything to add
-        if not source_streams["audio_streams"] and not source_streams["subtitle_streams"]:
-            print("No audio or subtitles to add from source")
-            return False
-        
-        # Always use v2 with MX Player fixes
-        print("Using v2 method with MX Player fixes...")
-        return merge_audio_subtitles_v2_mx_fixed(source_path, target_path, output_path)
-            
-    except Exception as e:
-        print(f"Error in simple merge: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    return optimized_merge(source_path, target_path, output_path)
