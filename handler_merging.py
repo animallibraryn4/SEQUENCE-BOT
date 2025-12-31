@@ -738,9 +738,199 @@ def setup_merging_handlers(app: Client):
         
         await message.reply_text(help_text, reply_markup=buttons)
     
-    # ... (keep all the existing callback and message handlers exactly as they were)
-    # The rest of the setup_merging_handlers function remains unchanged
-    # [Include all the existing handlers from your original code here]
+    @app.on_callback_query(filters.regex(r"^cancel_merge_cmd$"))
+    async def cancel_merge_callback(client, query):
+        """Handle cancel button callback"""
+        user_id = query.from_user.id
+        
+        if user_id in merging_users:
+            del merging_users[user_id]
+        
+        await query.message.edit_text(
+            "<blockquote><b>❌ Merge process cancelled.</b></blockquote>"
+        )
+        await query.answer("Merge cancelled")
+    
+    @app.on_message(filters.document | filters.video)
+    async def handle_merging_files(client: Client, message: Message):
+        """Handle files sent during merging process"""
+        if not await is_subscribed(client, message):
+            return
+        
+        # FIX: Check if message has a from_user (could be from channel or anonymous)
+        if not message.from_user:
+            return  # Skip messages without from_user
+        
+        user_id = message.from_user.id
+        
+        if user_id not in merging_users:
+            return
+        
+        state = merging_users[user_id]
+        file_obj = message.document or message.video
+        
+        if not file_obj:
+            return
+        
+        # Get filename
+        filename = file_obj.file_name or f"file_{message.id}"
+        mime_type = file_obj.mime_type or ""
+        
+        # Check if it's a video file
+        if not any(x in mime_type for x in ['video', 'octet-stream', 'x-matroska']):
+            await message.reply_text(
+                f"<blockquote>⚠️ Skipping non-video file: {filename}</blockquote>"
+            )
+            return
+        
+        file_data = {
+            "message": message,
+            "filename": filename,
+            "file_id": file_obj.file_id,
+            "file_size": file_obj.file_size,
+            "mime_type": mime_type
+        }
+        
+        if state.state == "waiting_for_source":
+            state.source_files.append(file_data)
+            
+            # Send confirmation
+            if len(state.source_files) % 3 == 0 or len(state.source_files) == 1:
+                await message.reply_text(
+                    f"<blockquote>📥 Received {len(state.source_files)} source files.</blockquote>\n"
+                    f"<blockquote>Send <code>/done</code> when finished with source files.</blockquote>"
+                )
+                
+        elif state.state == "waiting_for_target":
+            state.target_files.append(file_data)
+            
+            # Send confirmation
+            if len(state.target_files) % 3 == 0 or len(state.target_files) == 1:
+                await message.reply_text(
+                    f"<blockquote>📥 Received {len(state.target_files)} target files.</blockquote>\n"
+                    f"<blockquote>Send <code>/done</code> when finished with target files.</blockquote>"
+                )
+    
+    @app.on_message(filters.command("done"))
+    async def done_command(client: Client, message: Message):
+        """Handle /done command to proceed to next step"""
+        if not await is_subscribed(client, message):
+            return
+        
+        user_id = message.from_user.id
+        
+        if user_id not in merging_users:
+            await message.reply_text(
+                "<blockquote>❌ No active merging session. Use <code>/merging</code> to start.</blockquote>"
+            )
+            return
+        
+        state = merging_users[user_id]
+        
+        if state.state == "waiting_for_source":
+            if not state.source_files:
+                await message.reply_text(
+                    "<blockquote>❌ No source files received yet.</blockquote>\n"
+                    "<blockquote>Please send source files first.</blockquote>"
+                )
+                return
+            
+            state.state = "waiting_for_target"
+            
+            await message.reply_text(
+                f"<blockquote><b>✅ Source files received!</b></blockquote>\n\n"
+                f"<blockquote>Total source files: {len(state.source_files)}</blockquote>\n\n"
+                f"<blockquote><b>Now send me the TARGET files.</b></blockquote>\n\n"
+                f"<blockquote><i>📝 Note: Send the same number of target files</i></blockquote>"
+            )
+            
+        elif state.state == "waiting_for_target":
+            if not state.target_files:
+                await message.reply_text(
+                    "<blockquote>❌ No target files received yet.</blockquote>\n"
+                    "<blockquote>Please send target files first.</blockquote>"
+                )
+                return
+            
+            # Check if counts match
+            if len(state.source_files) != len(state.target_files):
+                await message.reply_text(
+                    f"<blockquote>⚠️ File count mismatch!</blockquote>\n\n"
+                    f"<blockquote>Source files: {len(state.source_files)}\n"
+                    f"Target files: {len(state.target_files)}</blockquote>\n\n"
+                    f"<blockquote>You can continue anyway, but only matching episodes will be processed.</blockquote>",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ Continue Anyway", callback_data="continue_merge")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_merge")]
+                    ])
+                )
+                return
+            
+            # Start processing
+            await start_merging_process(client, state, message)
+            
+        else:
+            await message.reply_text(
+                "<blockquote>❌ Invalid state. Use <code>/cancel_merge</code> to reset.</blockquote>"
+            )
+    
+    @app.on_callback_query(filters.regex(r"^(continue_merge|cancel_merge)$"))
+    async def merge_control_callback(client, query):
+        """Handle merge control callbacks"""
+        user_id = query.from_user.id
+        action = query.data
+        
+        if user_id not in merging_users:
+            await query.answer("Session expired", show_alert=True)
+            return
+        
+        state = merging_users[user_id]
+        
+        if action == "continue_merge":
+            await query.message.delete()
+            await start_merging_process(client, state, query.message)
+            
+        elif action == "cancel_merge":
+            if user_id in merging_users:
+                del merging_users[user_id]
+            await query.message.edit_text(
+                "<blockquote><b>❌ Merge process cancelled.</b></blockquote>"
+            )
+            await query.answer("Merge cancelled")
+    
+    @app.on_message(filters.command("cancel_merge"))
+    async def cancel_merge_command(client: Client, message: Message):
+        """Cancel the merging process"""
+        if not await is_subscribed(client, message):
+            return
+        
+        user_id = message.from_user.id
+        
+        if user_id in merging_users:
+            del merging_users[user_id]
+            await message.reply_text(
+                "<blockquote><b>❌ Merge process cancelled.</b></blockquote>"
+            )
+        else:
+            await message.reply_text(
+                "<blockquote>❌ No active merging session to cancel.</blockquote>"
+            )
+    
+    # Add cancel processing callback handler
+    @app.on_callback_query(filters.regex(r"^cancel_processing_(\d+)$"))
+    async def cancel_processing_callback(client, query):
+        """Handle cancel processing button callback"""
+        user_id = int(query.data.split("_")[2])
+        
+        if user_id != query.from_user.id:
+            await query.answer("You can only cancel your own processing!", show_alert=True)
+            return
+        
+        if user_id in PROCESSING_STATES:
+            PROCESSING_STATES[user_id]["cancelled"] = True
+            await query.answer("⏹️ Processing will be cancelled...", show_alert=True)
+        else:
+            await query.answer("No active processing to cancel", show_alert=True)
 
 # Export the setup function
 __all__ = ['setup_merging_handlers']
