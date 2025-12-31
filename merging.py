@@ -33,6 +33,25 @@ class MergingState:
         self.current_processing = 0
         self.total_files = 0
 
+def silent_cleanup(*file_paths):
+    """
+    Silently delete files without raising errors or notifying user
+    Returns the number of successfully deleted files
+    """
+    deleted_count = 0
+    for file_path in file_paths:
+        if file_path and isinstance(file_path, str):
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    deleted_count += 1
+                    print(f"✓ Cleaned up: {os.path.basename(file_path)}")
+            except Exception as e:
+                # Silent failure - don't raise, just log for debugging
+                print(f"⚠️ Could not delete {file_path}: {e}")
+                pass
+    return deleted_count
+
 # --- HELP TEXT UPDATE ---
 def get_merging_help_text() -> str:
     """Get help text for merging commands"""
