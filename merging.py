@@ -669,6 +669,172 @@ def get_file_extension(file_path: str) -> str:
     """Get file extension from path"""
     return Path(file_path).suffix.lower()
 
+def get_ffmpeg_path():
+    """Find ffmpeg executable path"""
+    # Try to find ffmpeg in system PATH
+    import shutil
+    ffmpeg_path = shutil.which('ffmpeg')
+    if ffmpeg_path:
+        return ffmpeg_path
+    else:
+        # Fallback to common paths
+        common_paths = [
+            '/usr/bin/ffmpeg',
+            '/usr/local/bin/ffmpeg',
+            '/bin/ffmpeg',
+            'ffmpeg.exe'
+        ]
+        for path in common_paths:
+            if os.path.exists(path):
+                return path
+    return 'ffmpeg'  # Default
+
+def compress_audio_if_needed(audio_file: str, max_size_mb: int = 20) -> str:
+    """
+    Compress audio file if it's larger than max_size_mb
+    Returns: Path to compressed file
+    """
+    try:
+        file_size = os.path.getsize(audio_file) / (1024 * 1024)  # MB
+        
+        if file_size <= max_size_mb:
+            return audio_file  # No compression needed
+        
+        # Create compressed version
+        compressed_file = audio_file.replace('.m4a', '_compressed.m4a')
+        
+        import subprocess
+        cmd = [
+            get_ffmpeg_path(), "-y",
+            "-i", audio_file,
+            "-c:a", "aac",
+            "-b:a", "96k",  # Compressed bitrate
+            "-ar", "44100",
+            "-ac", "2",
+            compressed_file
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            # Delete original and return compressed
+            silent_cleanup(audio_file)
+            return compressed_file
+        else:
+            return audio_file  # Return original if compression failed
+            
+    except Exception as e:
+        print(f"Audio compression error: {str(e)}")
+        return audio_file
+
+def compress_subtitle_if_needed(subtitle_file: str, max_size_mb: int = 20) -> str:
+    """
+    Compress subtitle file if it's larger than max_size_mb
+    Returns: Path to compressed file
+    """
+    try:
+        file_size = os.path.getsize(subtitle_file) / (1024 * 1024)  # MB
+        
+        if file_size <= max_size_mb:
+            return subtitle_file  # No compression needed
+        
+        # Simple subtitle compression: remove formatting and comments
+        compressed_file = subtitle_file.replace('.srt', '_compressed.srt')
+        
+        with open(subtitle_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        # Keep only essential lines (timestamps and dialogue)
+        essential_lines = []
+        skip_next = False
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Skip empty lines and comments
+            if not line or line.startswith('#') or line.startswith(';'):
+                continue
+            
+            # Skip style/formatting lines for ASS/SSA
+            if line.startswith('Format:'):
+                continue
+            if line.startswith('Style:'):
+                continue
+            if line.startswith('Dialogue:'):
+                # Keep only text part after 9th comma
+                parts = line.split(',', 9)
+                if len(parts) >= 10:
+                    essential_lines.append(parts[9])
+                continue
+            
+            # For SRT, keep timestamps and text
+            if '-->' in line or line.isdigit():
+                essential_lines.append(line)
+            else:
+                # Simple text line
+                essential_lines.append(line)
+        
+        with open(compressed_file, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(essential_lines))
+        
+        # Delete original if compression succeeded
+        if os.path.exists(compressed_file):
+            silent_cleanup(subtitle_file)
+            return compressed_file
+        else:
+            return subtitle_file
+            
+    except Exception as e:
+        print(f"Subtitle compression error: {str(e)}")
+        return subtitle_file
+
+def adjust_stream_to_source_spec(source_stream_info: dict, extracted_file: str) -> str:
+    """
+    Adjust extracted stream to match source file specifications
+    """
+    try:
+        import subprocess
+        from pathlib import Path
+        
+        # Create adjusted file path
+        file_path = Path(extracted_file)
+        adjusted_file = str(file_path.parent / f"adjusted_{file_path.name}")
+        
+        cmd = [get_ffmpeg_path(), "-y", "-i", extracted_file]
+        
+        # Adjust based on file type
+        if extracted_file.endswith(('.m4a', '.aac', '.mp3')):
+            # Audio adjustments
+            cmd.extend([
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-ar", "48000",
+                "-ac", "2",
+            ])
+            
+            # If source has specific audio properties, adjust
+            if "sample_rate" in source_stream_info:
+                cmd.extend(["-ar", str(source_stream_info["sample_rate"])])
+            if "channels" in source_stream_info:
+                cmd.extend(["-ac", str(source_stream_info["channels"])])
+                
+        elif extracted_file.endswith(('.srt', '.ass', '.ssa')):
+            # Subtitle adjustments - just copy for now
+            cmd.extend(["-c:s", "copy"])
+        
+        cmd.append(adjusted_file)
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            # Replace original with adjusted
+            silent_cleanup(extracted_file)
+            return adjusted_file
+        else:
+            return extracted_file
+            
+    except Exception as e:
+        print(f"Stream adjustment error: {str(e)}")
+        return extracted_file
+
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
     Simple merge function - Uses v2 method with MX Player fixes
