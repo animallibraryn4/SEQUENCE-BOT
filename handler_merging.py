@@ -142,6 +142,8 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                     
                     # Check cancellation after source download
                     if PROCESSING_STATES[user_id].get("cancelled"):
+                        # Cleanup before exiting
+                        silent_cleanup(source_file)
                         raise asyncio.CancelledError("Processing cancelled by user")
                     
                     # --- TARGET DOWNLOAD ---  
@@ -173,6 +175,8 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                       
                     if not target_file:  
                         print(f"Failed to download target file {idx}")  
+                        # Cleanup downloaded source file
+                        silent_cleanup(source_file)
                         await progress_msg.edit_text(
                             f"<blockquote><b>❌ Download Failed</b></blockquote>\n\n"
                             f"<blockquote>📁 {target_data['filename']}</blockquote>\n"
@@ -185,6 +189,8 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                       
                     # Check cancellation after target download
                     if PROCESSING_STATES[user_id].get("cancelled"):
+                        # Cleanup both files before exiting
+                        silent_cleanup(source_file, target_file)
                         raise asyncio.CancelledError("Processing cancelled by user")
                       
                     # Output file path - keep original target filename  
@@ -238,6 +244,8 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                         while merge_thread.is_alive():
                             # Check cancellation
                             if PROCESSING_STATES[user_id].get("cancelled"):
+                                # Cleanup files before exiting
+                                silent_cleanup(source_file, target_file)
                                 raise asyncio.CancelledError("Processing cancelled by user")
                                 
                             elapsed = time.time() - merge_start_time
@@ -264,6 +272,8 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                             if result_type == "success":
                                 merge_success = result
                             elif result_type == "cancelled":
+                                # Cleanup files
+                                silent_cleanup(source_file, target_file)
                                 raise asyncio.CancelledError("Processing cancelled by user")
                             else:
                                 print(f"Merge error: {result}")
@@ -277,9 +287,16 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                       
                     # Check cancellation after merge
                     if PROCESSING_STATES[user_id].get("cancelled"):
+                        # Cleanup all files
+                        silent_cleanup(source_file, target_file, output_file if os.path.exists(output_file) else None)
                         raise asyncio.CancelledError("Processing cancelled by user")
                       
                     if merge_success:  
+                        # ✅ INSTANT CLEANUP #1: Delete source and target files immediately after successful merge
+                        print(f"✅ Merge successful. Cleaning up source and target files...")
+                        deleted_count = silent_cleanup(source_file, target_file)
+                        print(f"✅ Cleaned up {deleted_count} temporary files (source and target)")
+                        
                         # --- UPLOAD STAGE ---  
                         start_time = time.time()  
                         
@@ -315,6 +332,11 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                             ),  
                             progress=upload_progress
                         )  
+                        
+                        # ✅ INSTANT CLEANUP #2: Delete merged file immediately after successful upload
+                        print(f"✅ Upload successful. Cleaning up merged file...")
+                        deleted_count = silent_cleanup(output_file)
+                        print(f"✅ Cleaned up {deleted_count} merged file")
                           
                         # --- FINAL STATUS FOR THIS FILE ---  
                         await progress_msg.edit_text(  
@@ -329,6 +351,10 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                           
                         print(f"Successfully merged file {idx}")  
                     else:  
+                        # Even if merge failed, cleanup downloaded files
+                        silent_cleanup(source_file, target_file)
+                        print(f"✅ Cleaned up source and target files after failed merge")
+                        
                         await progress_msg.edit_text(  
                             f"<blockquote><b>❌ Merge Failed ({overall_progress})</b></blockquote>\n\n"  
                             f"<blockquote>📁 {target_data['filename']}</blockquote>\n"  
@@ -340,11 +366,21 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                         print(f"Failed to merge file {idx}")  
                       
                 except asyncio.CancelledError as e:
-                    # User cancelled processing
+                    # User cancelled processing - files already cleaned up in individual checks
                     print(f"Processing cancelled by user for file {idx}")
                     raise e  # Re-raise to exit loop
                 except Exception as e:  
                     print(f"Error processing file {idx}: {str(e)}")  
+                    
+                    # Ensure cleanup even on unexpected errors
+                    try:
+                        # Cleanup any files that might exist
+                        if 'source_file' in locals(): silent_cleanup(source_file)
+                        if 'target_file' in locals(): silent_cleanup(target_file)
+                        if 'output_file' in locals() and os.path.exists(output_file): silent_cleanup(output_file)
+                    except:
+                        pass
+                    
                     await progress_msg.edit_text(  
                         f"<blockquote><b>❌ Processing Error ({idx}/{len(valid_pairs)})</b></blockquote>\n\n"  
                         f"<blockquote>📁 {target_data['filename']}</blockquote>\n"  
@@ -364,7 +400,8 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
             # Final completion message  
             await progress_msg.edit_text(  
                 "<blockquote><b>✅ All Merges Completed</b></blockquote>\n\n"  
-                "<blockquote>🎉 All merged files have been sent to you!</blockquote>"  
+                "<blockquote>🎉 All merged files have been sent to you!</blockquote>\n\n"
+                "<blockquote>💾 <i>All temporary files have been cleaned up automatically</i></blockquote>"  
             )  
               
     except asyncio.CancelledError:
@@ -395,6 +432,7 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
             del LAST_EDIT_TIME[user_id]
         if user_id in merging_users:  
             del merging_users[user_id]
+                        
 
 def setup_merging_handlers(app: Client):
     """Setup all merging-related handlers"""
