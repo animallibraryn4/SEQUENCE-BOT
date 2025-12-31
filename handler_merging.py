@@ -10,6 +10,7 @@ import subprocess
 import json
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from start import is_subscribed
 
 # Import from merging.py
 from merging import (
