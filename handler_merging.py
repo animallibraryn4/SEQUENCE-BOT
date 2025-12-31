@@ -1,3 +1,4 @@
+import os
 import asyncio
 import tempfile
 import time
@@ -14,6 +15,31 @@ from merging import (
     smart_progress_callback, cleanup_user_throttling,
     get_merging_help_text
 )
+
+def perform_silent_cleanup(source_file: str, target_file: str, output_file: str):
+    """
+    Perform silent cleanup of all temporary files
+    Returns: (source_deleted, target_deleted, output_deleted)
+    """
+    results = [False, False, False]
+    
+    # List of files to delete
+    files_to_clean = [
+        (source_file, "source"),
+        (target_file, "target"), 
+        (output_file, "merged")
+    ]
+    
+    for idx, (file_path, file_type) in enumerate(files_to_clean):
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                results[idx] = True
+                print(f"✓ Silent cleanup: {file_type} file deleted")
+            except Exception as e:
+                print(f"⚠️ Could not delete {file_type} file: {e}")
+    
+    return tuple(results)
 
 async def start_merging_process(client: Client, state: MergingState, message: Message):
     """Start the merging process"""
@@ -279,6 +305,9 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                         raise asyncio.CancelledError("Processing cancelled by user")
                       
                     if merge_success:  
+                        # --- SILENT CLEANUP: Delete downloaded files before upload ---
+                        perform_silent_cleanup(source_file, target_file, None)
+                        
                         # --- UPLOAD STAGE ---  
                         start_time = time.time()  
                         
@@ -315,6 +344,9 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                             progress=upload_progress
                         )  
                           
+                        # --- SILENT CLEANUP: Delete merged file after successful upload ---
+                        perform_silent_cleanup(None, None, output_file)
+                        
                         # --- FINAL STATUS FOR THIS FILE ---  
                         await progress_msg.edit_text(  
                             f"<blockquote><b>✅ Merge Completed ({overall_progress})</b></blockquote>\n\n"  
@@ -404,6 +436,10 @@ def setup_merging_handlers(app: Client):
         if not await is_subscribed(client, message):
             return
         
+        # FIX: Check if message has a from_user (could be from channel or anonymous)
+        if not message.from_user:
+            return  # Skip messages without from_user
+        
         user_id = message.from_user.id
         
         # Initialize merging state
@@ -448,6 +484,10 @@ def setup_merging_handlers(app: Client):
         """Handle files sent during merging process"""
         if not await is_subscribed(client, message):
             return
+        
+        # FIX: Check if message has a from_user (could be from channel or anonymous)
+        if not message.from_user:
+            return  # Skip messages without from_user
         
         user_id = message.from_user.id
         
@@ -504,6 +544,10 @@ def setup_merging_handlers(app: Client):
         """Handle /done command to proceed to next step"""
         if not await is_subscribed(client, message):
             return
+        
+        # FIX: Check if message has a from_user (could be from channel or anonymous)
+        if not message.from_user:
+            return  # Skip messages without from_user
         
         user_id = message.from_user.id
         
@@ -591,6 +635,10 @@ def setup_merging_handlers(app: Client):
         """Cancel the merging process"""
         if not await is_subscribed(client, message):
             return
+        
+        # FIX: Check if message has a from_user (could be from channel or anonymous)
+        if not message.from_user:
+            return  # Skip messages without from_user
         
         user_id = message.from_user.id
         
