@@ -9,11 +9,23 @@ from config import OWNER_ID
 from start import is_subscribed
 
 # Import from merging.py
+import os
+import asyncio
+import tempfile
+import time
+from pathlib import Path
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from config import OWNER_ID
+from start import is_subscribed
+
+# Import from merging.py - IMPORTANT: silent_cleanup ko import karein
 from merging import (
     MergingState, merging_users, PROCESSING_STATES, LAST_EDIT_TIME,
     get_file_extension, match_files_by_episode, merge_audio_subtitles_simple,
     smart_progress_callback, cleanup_user_throttling,
-    get_merging_help_text
+    get_merging_help_text,
+    silent_cleanup  # ✅ YEH LINE ADD KAREIN
 )
 
 async def start_merging_process(client: Client, state: MergingState, message: Message):
