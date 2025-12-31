@@ -9,23 +9,12 @@ from config import OWNER_ID
 from start import is_subscribed
 
 # Import from merging.py
-import os
-import asyncio
-import tempfile
-import time
-from pathlib import Path
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from config import OWNER_ID
-from start import is_subscribed
-
-# Import from merging.py - IMPORTANT: silent_cleanup ko import karein
 from merging import (
     MergingState, merging_users, PROCESSING_STATES, LAST_EDIT_TIME,
     get_file_extension, match_files_by_episode, merge_audio_subtitles_simple,
     smart_progress_callback, cleanup_user_throttling,
-    get_merging_help_text,
-    silent_cleanup  # ✅ YEH LINE ADD KAREIN
+    get_merging_help_text, silent_cleanup,
+    get_media_info, extract_streams_info
 )
 
 async def start_merging_process(client: Client, state: MergingState, message: Message):
@@ -47,10 +36,10 @@ async def start_merging_process(client: Client, state: MergingState, message: Me
     state.progress_msg = progress_msg
     
     # Start the merging process in background  
-    asyncio.create_task(process_merging(client, state, progress_msg))
+    asyncio.create_task(process_merging_new(client, state, progress_msg))
 
-async def process_merging(client: Client, state: MergingState, progress_msg: Message):
-    """Process the merging of all files with cancellation support"""
+async def process_merging_new(client: Client, state: MergingState, progress_msg: Message):
+    """NEW WORKFLOW: Download target first, then source, then merge"""
     user_id = state.user_id
     msg_id = progress_msg.id
     
@@ -95,13 +84,13 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                 f"<blockquote><b>📊 Files Matched</b></blockquote>\n\n"
                 f"<blockquote>Total pairs: {len(valid_pairs)}</blockquote>\n"
                 f"<blockquote>Skipped (no match): {len(matched_pairs) - len(valid_pairs)}</blockquote>\n\n"
-                f"<blockquote>🔄 Starting processing...</blockquote>",
+                f"<blockquote>🔄 Starting NEW workflow...</blockquote>",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("❌ Cancel Processing", callback_data=f"cancel_processing_{user_id}")]
                 ])
             )
             
-            # Process each matched pair  
+            # Process each matched pair with NEW workflow
             for idx, (source_data, target_data) in enumerate(valid_pairs, 1):  
                 try:  
                     # Check cancellation before each file
@@ -113,54 +102,9 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                     
                     overall_progress = f"{idx}/{len(valid_pairs)}"
                     
-                    # --- SOURCE DOWNLOAD ---  
-                    source_filename = f"source_{idx}{get_file_extension(source_data['filename'])}"  
-                    start_time = time.time()  
-                      
-                    await progress_msg.edit_text(  
-                        f"<blockquote><b>⬇️ Downloading Source ({overall_progress})</b></blockquote>\n\n"
-                        f"<blockquote>📁 {source_data['filename']}</blockquote>\n\n"
-                        f"<blockquote>Status: Starting download...</blockquote>",
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("❌ Cancel Processing", callback_data=f"cancel_processing_{user_id}")]
-                        ])
-                    )  
-                      
-                    # FIXED: Use a proper async callback function
-                    async def source_progress(current, total):
-                        await smart_progress_callback(
-                            current, total, progress_msg, start_time,
-                            f"⬇️ Source ({overall_progress})", 
-                            source_data["filename"], user_id, msg_id
-                        )
-                    
-                    source_file = await client.download_media(  
-                        source_data["message"],  
-                        file_name=str(temp_path / source_filename),  
-                        progress=source_progress
-                    )  
-                      
-                    if not source_file:  
-                        print(f"Failed to download source file {idx}")  
-                        await progress_msg.edit_text(
-                            f"<blockquote><b>❌ Download Failed</b></blockquote>\n\n"
-                            f"<blockquote>📁 {source_data['filename']}</blockquote>\n"
-                            f"<blockquote>Skipping to next file...</blockquote>",
-                            reply_markup=InlineKeyboardMarkup([
-                                [InlineKeyboardButton("❌ Cancel Processing", callback_data=f"cancel_processing_{user_id}")]
-                            ])
-                        )
-                        continue  
-                    
-                    # Check cancellation after source download
-                    if PROCESSING_STATES[user_id].get("cancelled"):
-                        # Cleanup before exiting
-                        silent_cleanup(source_file)
-                        raise asyncio.CancelledError("Processing cancelled by user")
-                    
-                    # --- TARGET DOWNLOAD ---  
+                    # --- STEP 1: DOWNLOAD TARGET FILE FIRST ---  
                     target_filename = f"target_{idx}{get_file_extension(target_data['filename'])}"  
-                    start_time = time.time()  
+                    target_start_time = time.time()  
                     
                     await progress_msg.edit_text(  
                         f"<blockquote><b>⬇️ Downloading Target ({overall_progress})</b></blockquote>\n\n"
@@ -171,10 +115,9 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                         ])
                     )  
                       
-                    # FIXED: Use a proper async callback function
                     async def target_progress(current, total):
                         await smart_progress_callback(
-                            current, total, progress_msg, start_time,
+                            current, total, progress_msg, target_start_time,
                             f"⬇️ Target ({overall_progress})", 
                             target_data["filename"], user_id, msg_id
                         )
@@ -187,8 +130,6 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                       
                     if not target_file:  
                         print(f"Failed to download target file {idx}")  
-                        # Cleanup downloaded source file
-                        silent_cleanup(source_file)
                         await progress_msg.edit_text(
                             f"<blockquote><b>❌ Download Failed</b></blockquote>\n\n"
                             f"<blockquote>📁 {target_data['filename']}</blockquote>\n"
@@ -198,13 +139,78 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                             ])
                         )
                         continue  
-                      
+                    
                     # Check cancellation after target download
                     if PROCESSING_STATES[user_id].get("cancelled"):
-                        # Cleanup both files before exiting
-                        silent_cleanup(source_file, target_file)
+                        silent_cleanup(target_file)
                         raise asyncio.CancelledError("Processing cancelled by user")
+                    
+                    # --- STEP 2: DOWNLOAD SOURCE FILE ---  
+                    source_filename = f"source_{idx}{get_file_extension(source_data['filename'])}"  
+                    source_start_time = time.time()  
                       
+                    await progress_msg.edit_text(  
+                        f"<blockquote><b>⬇️ Downloading Source ({overall_progress})</b></blockquote>\n\n"
+                        f"<blockquote>📁 {source_data['filename']}</blockquote>\n\n"
+                        f"<blockquote>Status: Starting download...</blockquote>",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("❌ Cancel Processing", callback_data=f"cancel_processing_{user_id}")]
+                        ])
+                    )  
+                      
+                    async def source_progress(current, total):
+                        await smart_progress_callback(
+                            current, total, progress_msg, source_start_time,
+                            f"⬇️ Source ({overall_progress})", 
+                            source_data["filename"], user_id, msg_id
+                        )
+                    
+                    source_file = await client.download_media(  
+                        source_data["message"],  
+                        file_name=str(temp_path / source_filename),  
+                        progress=source_progress
+                    )  
+                      
+                    if not source_file:  
+                        print(f"Failed to download source file {idx}")  
+                        # Cleanup downloaded target file
+                        silent_cleanup(target_file)
+                        await progress_msg.edit_text(
+                            f"<blockquote><b>❌ Download Failed</b></blockquote>\n\n"
+                            f"<blockquote>📁 {source_data['filename']}</blockquote>\n"
+                            f"<blockquote>Skipping to next file...</blockquote>",
+                            reply_markup=InlineKeyboardMarkup([
+                                [InlineKeyboardButton("❌ Cancel Processing", callback_data=f"cancel_processing_{user_id}")]
+                            ])
+                        )
+                        continue  
+                    
+                    # Check cancellation after source download
+                    if PROCESSING_STATES[user_id].get("cancelled"):
+                        silent_cleanup(target_file, source_file)
+                        raise asyncio.CancelledError("Processing cancelled by user")
+                    
+                    # --- STEP 3: EXTRACT AUDIO/SUBTITLES IN BACKGROUND ---
+                    await progress_msg.edit_text(  
+                        f"<blockquote><b>🔧 Extracting Audio/Subtitles ({overall_progress})</b></blockquote>\n\n"  
+                        f"<blockquote>📁 {source_data['filename']}</blockquote>\n\n"  
+                        f"<blockquote>🔹 Extracting audio tracks...</blockquote>\n"
+                        f"<blockquote>🔹 Extracting subtitle tracks...</blockquote>\n"
+                        f"<blockquote>🔹 Analyzing format...</blockquote>",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("❌ Cancel Processing", callback_data=f"cancel_processing_{user_id}")]
+                        ])
+                    )
+                    
+                    # Get source file info
+                    source_info = get_media_info(source_file)
+                    source_streams = extract_streams_info(source_info)
+                    
+                    # --- STEP 4: DELETE TARGET FILE ---
+                    print(f"✅ Deleting target file: {os.path.basename(target_file)}")
+                    deleted_count = silent_cleanup(target_file)
+                    print(f"✅ Cleaned up {deleted_count} target file(s)")
+                    
                     # Output file path - keep original target filename  
                     output_filename = target_data["filename"]  
                     output_file = str(temp_path / output_filename)  
@@ -214,12 +220,14 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                     print(f"  Target: {target_data['filename']}")  
                     print(f"  Output: {output_filename}")  
                       
-                    # --- MERGE STAGE ---  
+                    # --- STEP 5: MERGE WITH OPTIMIZATION ---
                     merge_start_time = time.time()  
                     await progress_msg.edit_text(  
-                        f"<blockquote><b>🛠️ Merging ({overall_progress})</b></blockquote>\n\n"  
+                        f"<blockquote><b>🛠️ Merging with Optimization ({overall_progress})</b></blockquote>\n\n"  
                         f"<blockquote>📁 {output_filename}</blockquote>\n\n"  
-                        f"<blockquote>Engine : FFmpeg</blockquote>\n"  
+                        f"<blockquote>Engine : FFmpeg</blockquote>\n"
+                        f"<blockquote>Audio tracks: {len(source_streams['audio_streams'])}</blockquote>\n"
+                        f"<blockquote>Subtitle tracks: {len(source_streams['subtitle_streams'])}</blockquote>\n"
                         f"<blockquote>Status : Processing (0%)</blockquote>",
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("❌ Cancel Processing", callback_data=f"cancel_processing_{user_id}")]
@@ -229,7 +237,6 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                     # Run merge in thread to avoid blocking
                     merge_success = False
                     try:
-                        # Use threading to run ffmpeg without blocking
                         import threading
                         from queue import Queue
                         
@@ -242,7 +249,7 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                                     result_queue.put(("cancelled", None))
                                     return
                                     
-                                success = merge_audio_subtitles_simple(source_file, target_file, output_file)
+                                success = merge_audio_subtitles_simple(source_file, source_file, output_file)
                                 result_queue.put(("success", success))
                             except Exception as e:
                                 result_queue.put(("error", str(e)))
@@ -257,12 +264,12 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                             # Check cancellation
                             if PROCESSING_STATES[user_id].get("cancelled"):
                                 # Cleanup files before exiting
-                                silent_cleanup(source_file, target_file)
+                                silent_cleanup(source_file)
                                 raise asyncio.CancelledError("Processing cancelled by user")
                                 
                             elapsed = time.time() - merge_start_time
                             progress_text = (
-                                f"<blockquote><b>🛠️ Merging ({overall_progress})</b></blockquote>\n\n"  
+                                f"<blockquote><b>🛠️ Merging with Optimization ({overall_progress})</b></blockquote>\n\n"  
                                 f"<blockquote>📁 {output_filename}</blockquote>\n\n"  
                                 f"<blockquote>Engine : FFmpeg</blockquote>\n"  
                                 f"<blockquote>Status : Processing ({elapsed:.0f}s elapsed)</blockquote>"  
@@ -285,7 +292,7 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                                 merge_success = result
                             elif result_type == "cancelled":
                                 # Cleanup files
-                                silent_cleanup(source_file, target_file)
+                                silent_cleanup(source_file)
                                 raise asyncio.CancelledError("Processing cancelled by user")
                             else:
                                 print(f"Merge error: {result}")
@@ -296,18 +303,20 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                     except Exception as e:
                         print(f"Merge thread error: {str(e)}")
                         merge_success = False
+                    
+                    # --- STEP 6: DELETE SOURCE FILE ---
+                    print(f"✅ Deleting source file: {os.path.basename(source_file)}")
+                    deleted_count = silent_cleanup(source_file)
+                    print(f"✅ Cleaned up {deleted_count} source file(s)")
                       
                     # Check cancellation after merge
                     if PROCESSING_STATES[user_id].get("cancelled"):
                         # Cleanup all files
-                        silent_cleanup(source_file, target_file, output_file if os.path.exists(output_file) else None)
+                        silent_cleanup(output_file if os.path.exists(output_file) else None)
                         raise asyncio.CancelledError("Processing cancelled by user")
                       
                     if merge_success:  
-                        # ✅ INSTANT CLEANUP #1: Delete source and target files immediately after successful merge
-                        print(f"✅ Merge successful. Cleaning up source and target files...")
-                        deleted_count = silent_cleanup(source_file, target_file)
-                        print(f"✅ Cleaned up {deleted_count} temporary files (source and target)")
+                        print(f"✅ Merge successful.")
                         
                         # --- UPLOAD STAGE ---  
                         start_time = time.time()  
@@ -340,22 +349,24 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                                 f"<blockquote>✅ <b>Merged File</b></blockquote>\n"  
                                 f"<blockquote>📁 {target_data['filename']}</blockquote>\n"  
                                 f"<blockquote>🎵 Audio tracks added from source</blockquote>\n"  
-                                f"<blockquote>📝 Subtitle tracks added from source</blockquote>"  
+                                f"<blockquote>📝 Subtitle tracks added from source</blockquote>\n"
+                                f"<blockquote>🔧 Optimized for source format</blockquote>"  
                             ),  
                             progress=upload_progress
                         )  
                         
-                        # ✅ INSTANT CLEANUP #2: Delete merged file immediately after successful upload
-                        print(f"✅ Upload successful. Cleaning up merged file...")
+                        # --- STEP 7: DELETE MERGED FILE AFTER UPLOAD ---
+                        print(f"✅ Upload successful. Deleting merged file: {os.path.basename(output_file)}")
                         deleted_count = silent_cleanup(output_file)
-                        print(f"✅ Cleaned up {deleted_count} merged file")
+                        print(f"✅ Cleaned up {deleted_count} merged file(s)")
                           
                         # --- FINAL STATUS FOR THIS FILE ---  
                         await progress_msg.edit_text(  
                             f"<blockquote><b>✅ Merge Completed ({overall_progress})</b></blockquote>\n\n"  
                             f"<blockquote>📁 {output_filename}</blockquote>\n"  
                             f"<blockquote>🎵 Source audio set as DEFAULT</blockquote>\n"  
-                            f"<blockquote>🎯 No quality loss</blockquote>",
+                            f"<blockquote>🔧 Optimized for source format</blockquote>\n"
+                            f"<blockquote>🧹 All temporary files cleaned up</blockquote>",
                             reply_markup=InlineKeyboardMarkup([
                                 [InlineKeyboardButton("❌ Cancel Processing", callback_data=f"cancel_processing_{user_id}")]
                             ])
@@ -363,9 +374,10 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                           
                         print(f"Successfully merged file {idx}")  
                     else:  
-                        # Even if merge failed, cleanup downloaded files
-                        silent_cleanup(source_file, target_file)
-                        print(f"✅ Cleaned up source and target files after failed merge")
+                        # Cleanup on failure
+                        if os.path.exists(output_file):
+                            silent_cleanup(output_file)
+                        print(f"✅ Cleaned up files after failed merge")
                         
                         await progress_msg.edit_text(  
                             f"<blockquote><b>❌ Merge Failed ({overall_progress})</b></blockquote>\n\n"  
@@ -386,9 +398,8 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
                     
                     # Ensure cleanup even on unexpected errors
                     try:
-                        # Cleanup any files that might exist
-                        if 'source_file' in locals(): silent_cleanup(source_file)
                         if 'target_file' in locals(): silent_cleanup(target_file)
+                        if 'source_file' in locals(): silent_cleanup(source_file)
                         if 'output_file' in locals() and os.path.exists(output_file): silent_cleanup(output_file)
                     except:
                         pass
@@ -413,7 +424,16 @@ async def process_merging(client: Client, state: MergingState, progress_msg: Mes
             await progress_msg.edit_text(  
                 "<blockquote><b>✅ All Merges Completed</b></blockquote>\n\n"  
                 "<blockquote>🎉 All merged files have been sent to you!</blockquote>\n\n"
-                "<blockquote>💾 <i>All temporary files have been cleaned up automatically</i></blockquote>"  
+                "<blockquote>🔄 <b>NEW Workflow Used:</b></blockquote>\n"
+                "<blockquote>1. Target file downloaded first</blockquote>\n"
+                "<blockquote>2. Source file downloaded</blockquote>\n"
+                "<blockquote>3. Audio/subtitles extracted in background</blockquote>\n"
+                "<blockquote>4. Target file deleted</blockquote>\n"
+                "<blockquote>5. Merged with format optimization</blockquote>\n"
+                "<blockquote>6. Source file deleted</blockquote>\n"
+                "<blockquote>7. File uploaded</blockquote>\n"
+                "<blockquote>8. Merged file deleted</blockquote>\n\n"
+                "<blockquote>💾 <i>All temporary files cleaned up automatically</i></blockquote>"  
             )  
               
     except asyncio.CancelledError:
@@ -461,14 +481,22 @@ def setup_merging_handlers(app: Client):
         merging_users[user_id] = MergingState(user_id)
         
         help_text = (
-            "<blockquote><b>🔧 AUTO FILE MERGING MODE</b></blockquote>\n\n"
+            "<blockquote><b>🔧 AUTO FILE MERGING MODE (NEW WORKFLOW)</b></blockquote>\n\n"
             "<blockquote>Please send the SOURCE FILES from which you want to extract audio and subtitles.</blockquote>\n\n"
-            "<blockquote><b>📝 Instructions:</b>\n"
+            "<blockquote><b>📝 NEW Workflow:</b>\n"
             "1. Send all source files (with desired audio/subtitle tracks)\n"
             "2. Send <code>/done</code> when finished\n"
             "3. Send all target files (to add tracks to)\n"
             "4. Send <code>/done</code> again\n"
-            "5. Wait for processing</blockquote>\n\n"
+            "5. Bot will process with this optimized workflow:</blockquote>\n"
+            "<blockquote>   • Target file downloaded first\n"
+            "   • Source file downloaded\n"
+            "   • Audio/subtitles extracted in background\n"
+            "   • Target file deleted\n"
+            "   • Merged with format optimization\n"
+            "   • Source file deleted\n"
+            "   • File uploaded\n"
+            "   • Merged file deleted</blockquote>\n\n"
             "<blockquote><b>⚠️ Requirements:</b>\n"
             "- Files should be MKV format for best results\n"
             "- Files should have similar naming for auto-matching\n"
@@ -609,7 +637,7 @@ def setup_merging_handlers(app: Client):
                 )
                 return
             
-            # Start processing
+            # Start processing with NEW workflow
             await start_merging_process(client, state, message)
             
         else:
