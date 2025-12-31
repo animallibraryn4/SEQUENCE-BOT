@@ -405,7 +405,7 @@ def extract_tracks_from_source(source_path: str, temp_dir: Path) -> Dict:
     
     return extracted_tracks
 
-def calculate_bitrate_for_size(file_path: str, target_size_mb: int = 30) -> int:
+def calculate_bitrate_for_size(file_path: str, target_size_mb: int = 3000) -> int:
     """Calculate appropriate bitrate to keep file under target size"""
     try:
         info = get_media_info(file_path)
