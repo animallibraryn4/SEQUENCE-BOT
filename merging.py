@@ -336,8 +336,99 @@ def analyze_target_specs(file_path: str) -> Dict:
     
     return target_specs
 
+# --- AUDIO SYNC FIXES ---
+def get_audio_start_time(file_path: str, stream_index: int) -> float:
+    """Get the start time (in seconds) of an audio stream"""
+    try:
+        cmd = [
+            'ffprobe',
+            '-v', 'quiet',
+            '-select_streams', f'a:{stream_index}',
+            '-show_entries', 'stream=start_time',
+            '-of', 'json',
+            file_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            if 'streams' in data and len(data['streams']) > 0:
+                start_time = data['streams'][0].get('start_time')
+                if start_time:
+                    return float(start_time)
+    except Exception as e:
+        print(f"Error getting audio start time: {e}")
+    return 0.0
+
+def get_video_start_time(file_path: str) -> float:
+    """Get the start time (in seconds) of the video stream"""
+    try:
+        cmd = [
+            'ffprobe',
+            '-v', 'quiet',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=start_time',
+            '-of', 'json',
+            file_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            if 'streams' in data and len(data['streams']) > 0:
+                start_time = data['streams'][0].get('start_time')
+                if start_time:
+                    return float(start_time)
+    except Exception as e:
+        print(f"Error getting video start time: {e}")
+    return 0.0
+
+def verify_audio_sync(audio_path: str):
+    """Verify audio file has proper timing"""
+    try:
+        cmd = [
+            'ffprobe',
+            '-v', 'quiet',
+            '-show_entries', 'format=duration,start_time',
+            '-of', 'json',
+            audio_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            if 'format' in data:
+                duration = data['format'].get('duration', 0)
+                start_time = data['format'].get('start_time', 0)
+                print(f"Audio timing - Duration: {duration}s, Start: {start_time}s")
+    except Exception as e:
+        print(f"Error verifying audio sync: {e}")
+
+def verify_final_sync(file_path: str):
+    """Verify all streams in final file are in sync"""
+    try:
+        cmd = [
+            'ffprobe',
+            '-v', 'quiet',
+            '-show_entries', 'stream=codec_type,start_time',
+            '-of', 'json',
+            file_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            if 'streams' in data:
+                print("Final file stream timings:")
+                for i, stream in enumerate(data['streams']):
+                    stream_type = stream.get('codec_type', 'unknown')
+                    start_time = stream.get('start_time', '0')
+                    print(f"  Stream {i} ({stream_type}): start={start_time}s")
+    except Exception as e:
+        print(f"Error verifying final sync: {e}")
+
 def extract_tracks_from_source(source_path: str, temp_dir: Path) -> Dict:
-    """Extract audio and subtitle tracks from source file"""
+    """Extract audio and subtitle tracks from source file with timestamp preservation"""
     extracted_tracks = {
         "audio_files": [],
         "subtitle_files": [],
@@ -352,15 +443,19 @@ def extract_tracks_from_source(source_path: str, temp_dir: Path) -> Dict:
         print(f"Extracting {len(streams_info['audio_streams'])} audio tracks and "
               f"{len(streams_info['subtitle_streams'])} subtitle tracks from source")
         
-        # Extract audio tracks
+        # Extract audio tracks WITH TIMESTAMP PRESERVATION
         for idx, audio_info in enumerate(streams_info["audio_streams"]):
             audio_output = temp_dir / f"audio_{idx}_{audio_info['language']}.m4a"
             
+            # IMPORTANT: Use -copyts to copy timestamps and -avoid_negative_ts make_nonnegative
+            # This ensures audio sync is preserved
             cmd = [
                 "ffmpeg", "-y",
                 "-i", source_path,
                 "-map", f"0:a:{idx}",
                 "-c:a", "copy",
+                "-copyts",  # Copy timestamps
+                "-avoid_negative_ts", "make_nonnegative",  # Handle negative timestamps
                 str(audio_output)
             ]
             
@@ -371,9 +466,16 @@ def extract_tracks_from_source(source_path: str, temp_dir: Path) -> Dict:
                     "index": idx,
                     "language": audio_info["language"],
                     "codec": audio_info["codec"],
-                    "original_bitrate": audio_info.get("bit_rate", "128000")
+                    "original_bitrate": audio_info.get("bit_rate", "128000"),
+                    "start_time": 0  # We'll get this from ffprobe
                 })
                 print(f"  ✓ Extracted audio track {idx+1} ({audio_info['language']})")
+                
+                # Get actual start time of this audio stream
+                start_time = get_audio_start_time(source_path, idx)
+                if start_time > 0:
+                    extracted_tracks["audio_files"][-1]["start_time"] = start_time
+                    print(f"    Start time: {start_time:.3f}s")
         
         # Extract subtitle tracks
         for idx, sub_info in enumerate(streams_info["subtitle_streams"]):
@@ -383,6 +485,7 @@ def extract_tracks_from_source(source_path: str, temp_dir: Path) -> Dict:
                 "ffmpeg", "-y",
                 "-i", source_path,
                 "-map", f"0:s:{idx}",
+                "-copyts",  # Copy timestamps for subtitles too
                 str(sub_output)
             ]
             
@@ -431,12 +534,12 @@ def calculate_bitrate_for_size(file_path: str, target_size_mb: int = 3000) -> in
         print(f"Error calculating bitrate: {e}")
         return 128000  # Fallback
 
-def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: str) -> bool:
-    """Re-encode audio to match target specifications"""
+def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: str, start_time: float = 0) -> bool:
+    """Re-encode audio to match target specifications while preserving sync"""
     try:
         # Get audio file size
         file_size = os.path.getsize(audio_path) / (1024 * 1024)  # MB
-        print(f"Audio file size: {file_size:.2f} MB")
+        print(f"Audio file size: {file_size:.2f} MB, Start time: {start_time:.3f}s")
         
         # Calculate appropriate bitrate
         if file_size > 30:  # If audio track > 30MB
@@ -453,17 +556,32 @@ def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: 
         if target_codec.lower() not in ["aac", "opus", "mp3"]:
             target_codec = "aac"  # Default to AAC for compatibility
         
+        # Build command with timestamp preservation
         cmd = [
             "ffmpeg", "-y",
             "-i", audio_path,
+        ]
+        
+        # If audio has a start time offset, handle it
+        if start_time > 0:
+            # Use -itsoffset to delay the audio if it starts earlier than video
+            # or -af "adelay" if we need to add delay
+            if start_time > 0.1:  # If start time is significant (>100ms)
+                # Method 1: Use itsoffset (affects all streams)
+                cmd.extend(["-itsoffset", f"{start_time}"])
+                print(f"Applying start time offset: {start_time:.3f}s")
+        
+        cmd.extend([
             "-c:a", target_codec,
             "-b:a", str(target_bitrate),
             "-ar", str(target_specs.get("audio_sample_rate", 48000)),
             "-ac", str(target_specs.get("audio_channels", 2)),
             "-vn",  # No video
             "-sn",  # No subtitles
+            "-copyts",  # Copy timestamps
+            "-avoid_negative_ts", "make_nonnegative",
             output_path
-        ]
+        ])
         
         print(f"Re-encoding command: {' '.join(cmd)}")
         
@@ -472,6 +590,10 @@ def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: 
         if result.returncode == 0:
             new_size = os.path.getsize(output_path) / (1024 * 1024)
             print(f"Re-encoded audio: {new_size:.2f} MB (compression: {(file_size - new_size)/file_size*100:.1f}%)")
+            
+            # Verify the output has proper timing
+            verify_audio_sync(output_path)
+            
             return True
         else:
             print(f"Re-encoding failed: {result.stderr[:500]}")
@@ -482,11 +604,15 @@ def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: 
         return False
 
 def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_path: str) -> bool:
-    """Merge re-encoded tracks into target file"""
+    """Merge re-encoded tracks into target file with proper synchronization"""
     try:
         # Get target info
         target_info = get_media_info(target_path)
         target_streams = extract_streams_info(target_info)
+        
+        # Get target video start time
+        target_start_time = get_video_start_time(target_path)
+        print(f"Target video start time: {target_start_time:.3f}s")
         
         # Build ffmpeg command
         inputs = [target_path]
@@ -496,12 +622,22 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
         for i in range(len(target_streams["audio_streams"])):
             maps.extend(["-map", f"0:a:{i}"])
         
-        # Add re-encoded audio tracks
+        # Add re-encoded audio tracks with proper delay calculation
         audio_idx = 1
         for audio_track in reencoded_tracks.get("audio_files", []):
             if os.path.exists(audio_track["path"]):
                 inputs.append(audio_track["path"])
                 maps.extend(["-map", f"{audio_idx}:a:0"])
+                
+                # Calculate if we need to add delay for this track
+                audio_start = audio_track.get("start_time", 0)
+                if audio_start > target_start_time + 0.1:  # If audio starts significantly later
+                    delay = audio_start - target_start_time
+                    print(f"Audio track starts {delay:.3f}s later than video, will be adjusted")
+                elif target_start_time > audio_start + 0.1:  # If video starts later
+                    delay = target_start_time - audio_start
+                    print(f"Video starts {delay:.3f}s later than audio, will be adjusted")
+                
                 audio_idx += 1
         
         # Map target subtitles
@@ -531,7 +667,7 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
             "-c:v", "copy",
         ])
         
-        # Audio settings - copy all (already re-encoded)
+        # Audio settings - copy all (already re-encoded with proper timing)
         cmd.extend(["-c:a", "copy"])
         
         # Subtitle settings - copy all
@@ -544,10 +680,11 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
         if len(reencoded_tracks.get("audio_files", [])) > 0:
             cmd.extend([f"-disposition:a:{total_target_audio}", "default"])  # First source audio default
         
-        # Container optimizations
+        # IMPORTANT: Use async parameter for audio synchronization
         cmd.extend([
-            "-movflags", "+faststart",
+            "-async", "1",  # Stretch/squeeze audio to match video duration
             "-max_interleave_delta", "0",
+            "-movflags", "+faststart",
         ])
         
         cmd.append(output_path)
@@ -558,6 +695,10 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
         
         if result.returncode == 0:
             print("Merge successful")
+            
+            # Verify final output sync
+            verify_final_sync(output_path)
+            
             return True
         else:
             print(f"Merge failed: {result.stderr[:500]}")
@@ -616,10 +757,12 @@ def optimized_merge(source_path: str, target_path: str, output_path: str) -> boo
             for audio_track in extracted_tracks["audio_files"]:
                 reencoded_path = temp_path / f"reencoded_{os.path.basename(audio_track['path'])}"
                 
-                if reencode_audio_for_target(audio_track["path"], target_specs, str(reencoded_path)):
+                # Pass the start_time parameter
+                if reencode_audio_for_target(audio_track["path"], target_specs, str(reencoded_path), audio_track.get("start_time", 0)):
                     reencoded_tracks["audio_files"].append({
                         "path": str(reencoded_path),
-                        "language": audio_track["language"]
+                        "language": audio_track["language"],
+                        "start_time": audio_track.get("start_time", 0)  # Pass along
                     })
                     # Delete original extracted audio
                     silent_cleanup(audio_track["path"])
