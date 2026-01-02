@@ -361,6 +361,7 @@ def extract_tracks_from_source(source_path: str, temp_dir: Path) -> Dict:
                 "-i", source_path,
                 "-map", f"0:a:{idx}",
                 "-c:a", "copy",
+                "-af", "asetpts=PTS-STARTPTS",
                 str(audio_output)
             ]
             
