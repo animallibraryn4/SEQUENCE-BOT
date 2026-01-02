@@ -460,12 +460,12 @@ def calculate_bitrate_for_size(file_path: str, target_size_mb: int = 3000) -> in
         print(f"Error calculating bitrate: {e}")
         return 128000  # Fallback
 
-def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: str) -> bool:
-    """Re-encode audio to match target specifications"""
+def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: str, audio_delay: float = 0) -> bool:
+    """Re-encode audio to match target specifications with timing correction"""
     try:
         # Get audio file size
         file_size = os.path.getsize(audio_path) / (1024 * 1024)  # MB
-        print(f"Audio file size: {file_size:.2f} MB")
+        print(f"Audio file size: {file_size:.2f} MB, Delay: {audio_delay:.3f}s")
         
         # Calculate appropriate bitrate
         if file_size > 30:  # If audio track > 30MB
@@ -482,9 +482,22 @@ def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: 
         if target_codec.lower() not in ["aac", "opus", "mp3"]:
             target_codec = "aac"  # Default to AAC for compatibility
         
+        # Build command with timing adjustment
         cmd = [
             "ffmpeg", "-y",
             "-i", audio_path,
+        ]
+        
+        # Apply audio delay if needed
+        if audio_delay != 0:
+            if audio_delay > 0:
+                # Audio starts later than video, add silence at beginning
+                cmd.extend(["-af", f"adelay={int(audio_delay*1000)}|{int(audio_delay*1000)}"])
+            else:
+                # Audio starts earlier than video, need to cut beginning
+                cmd.extend(["-ss", str(abs(audio_delay))])
+        
+        cmd.extend([
             "-c:a", target_codec,
             "-b:a", str(target_bitrate),
             "-ar", str(target_specs.get("audio_sample_rate", 48000)),
@@ -492,9 +505,9 @@ def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: 
             "-vn",  # No video
             "-sn",  # No subtitles
             output_path
-        ]
+        ])
         
-        print(f"Re-encoding command: {' '.join(cmd)}")
+        print(f"Re-encoding command with delay correction: {' '.join(cmd[:10])}...")
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         
