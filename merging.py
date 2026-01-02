@@ -276,7 +276,7 @@ def get_media_info(file_path: str) -> Dict:
     return {"streams": [], "format": {}}
 
 def extract_streams_info(media_info: Dict) -> Dict:
-    """Extract audio and subtitle stream information"""
+    """Extract audio and subtitle stream information with timing"""
     audio_streams = []
     subtitle_streams = []
     
@@ -284,6 +284,27 @@ def extract_streams_info(media_info: Dict) -> Dict:
         codec_type = stream.get("codec_type", "")
         
         if codec_type == "audio":
+            # Get audio delay/timing information
+            # Some formats store delay in 'start_time', others in 'start_pts'
+            start_time = stream.get("start_time", 0)
+            start_pts = stream.get("start_pts", 0)
+            
+            # Convert to seconds if not already
+            try:
+                if isinstance(start_time, str):
+                    start_time = float(start_time)
+            except:
+                start_time = 0
+                
+            try:
+                if isinstance(start_pts, str):
+                    start_pts = float(start_pts)
+            except:
+                start_pts = 0
+            
+            # Use whichever timing value is available
+            audio_delay = start_time if start_time != 0 else (start_pts / 1000 if start_pts != 0 else 0)
+            
             audio_info = {
                 "index": stream.get("index"),
                 "codec": stream.get("codec_name"),
@@ -292,7 +313,10 @@ def extract_streams_info(media_info: Dict) -> Dict:
                 "sample_rate": stream.get("sample_rate", 48000),
                 "bit_rate": stream.get("bit_rate", "128000"),
                 "duration": stream.get("duration", 0),
-                "title": stream.get("tags", {}).get("title", "")
+                "title": stream.get("tags", {}).get("title", ""),
+                "start_time": audio_delay,  # Added: Audio delay in seconds
+                "start_pts": start_pts,
+                "time_base": stream.get("time_base", "1/1000")
             }
             audio_streams.append(audio_info)
             
