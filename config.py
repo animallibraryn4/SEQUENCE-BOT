@@ -34,6 +34,28 @@ FSUB_CHANNEL_3 = 0
 OWNER_ID = 5380609667
 
 
+# File processing limits
+MAX_FILE_SIZE_MB = 2000  # 2GB
+MAX_AUDIO_SIZE_MB = 30   # 30MB audio limit
+MAX_CONCURRENT_PROCESSES = 3
+
+# FFmpeg paths (update according to your system)
+FFMPEG_PATH = "ffmpeg"
+FFPROBE_PATH = "ffprobe"
+
+# Progress update interval (seconds)
+PROGRESS_UPDATE_INTERVAL = 1.2
+
+# Temporary directory
+TEMP_DIR = "/tmp/telegram_merge_bot"
+
+# Timeouts (seconds)
+DOWNLOAD_TIMEOUT = 3600  # 1 hour
+UPLOAD_TIMEOUT = 3600    # 1 hour
+PROCESSING_TIMEOUT = 7200 # 2 hours
+
+
+
 
 
 
