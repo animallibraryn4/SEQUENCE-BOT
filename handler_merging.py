@@ -1,8 +1,3 @@
-"""
-Telegram Bot Handlers for File Merging
-Handles user interactions, file downloads, and progress updates
-"""
-
 import os
 import asyncio
 import tempfile
