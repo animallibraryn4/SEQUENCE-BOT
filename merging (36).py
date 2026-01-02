@@ -452,10 +452,11 @@ def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: 
         target_codec = target_specs.get("audio_codec", "aac")
         if target_codec.lower() not in ["aac", "opus", "mp3"]:
             target_codec = "aac"  # Default to AAC for compatibility
-        
+            
         cmd = [
             "ffmpeg", "-y",
             "-i", audio_path,
+            "-af", "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
             "-c:a", target_codec,
             "-b:a", str(target_bitrate),
             "-ar", str(target_specs.get("audio_sample_rate", 48000)),
@@ -480,6 +481,7 @@ def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: 
     except Exception as e:
         print(f"Error re-encoding audio: {e}")
         return False
+
 
 def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_path: str) -> bool:
     """Merge re-encoded tracks into target file"""
@@ -517,7 +519,7 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
                 sub_idx += 1
         
         # Build final command
-        cmd = ["ffmpeg", "-y"]
+        cmd = ["ffmpeg", "-y", "-use_wallclock_as_timestamps", "0"]
         
         # Add all inputs
         for input_file in inputs:
@@ -532,7 +534,15 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
         ])
         
         # Audio settings - copy all (already re-encoded)
-        cmd.extend(["-c:a", "copy"])
+        cmd.extend([
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-c:s", "copy",
+            "-map_metadata", "0",        # Target file ki metadata copy karega
+            "-map_chapters", "0",        # Chapters preserve rakhega
+            "-fflags", "+genpts",        # Missing timestamps generate karega
+            "-async", "1"                # Audio sync enforce karega
+        ])
         
         # Subtitle settings - copy all
         cmd.extend(["-c:s", "copy"])
