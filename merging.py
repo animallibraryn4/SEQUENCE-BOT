@@ -361,7 +361,7 @@ def analyze_target_specs(file_path: str) -> Dict:
     return target_specs
 
 def extract_tracks_from_source(source_path: str, temp_dir: Path) -> Dict:
-    """Extract audio and subtitle tracks from source file"""
+    """Extract audio and subtitle tracks from source file with timing preservation"""
     extracted_tracks = {
         "audio_files": [],
         "subtitle_files": [],
@@ -376,15 +376,17 @@ def extract_tracks_from_source(source_path: str, temp_dir: Path) -> Dict:
         print(f"Extracting {len(streams_info['audio_streams'])} audio tracks and "
               f"{len(streams_info['subtitle_streams'])} subtitle tracks from source")
         
-        # Extract audio tracks
+        # Extract audio tracks WITH TIMING PRESERVATION
         for idx, audio_info in enumerate(streams_info["audio_streams"]):
             audio_output = temp_dir / f"audio_{idx}_{audio_info['language']}.m4a"
             
+            # NEW: Extract with timing offset preserved
             cmd = [
                 "ffmpeg", "-y",
                 "-i", source_path,
                 "-map", f"0:a:{idx}",
                 "-c:a", "copy",
+                "-bsf:a", "aac_adtstoasc",  # Fix AAC timing
                 str(audio_output)
             ]
             
@@ -395,11 +397,14 @@ def extract_tracks_from_source(source_path: str, temp_dir: Path) -> Dict:
                     "index": idx,
                     "language": audio_info["language"],
                     "codec": audio_info["codec"],
-                    "original_bitrate": audio_info.get("bit_rate", "128000")
+                    "original_bitrate": audio_info.get("bit_rate", "128000"),
+                    "start_time": audio_info.get("start_time", 0),  # Store timing info
+                    "start_pts": audio_info.get("start_pts", 0)
                 })
-                print(f"  ✓ Extracted audio track {idx+1} ({audio_info['language']})")
+                print(f"  ✓ Extracted audio track {idx+1} ({audio_info['language']}) "
+                      f"delay: {audio_info.get('start_time', 0):.3f}s")
         
-        # Extract subtitle tracks
+        # Extract subtitle tracks (same as before)
         for idx, sub_info in enumerate(streams_info["subtitle_streams"]):
             sub_output = temp_dir / f"subtitle_{idx}_{sub_info['language']}.srt"
             
