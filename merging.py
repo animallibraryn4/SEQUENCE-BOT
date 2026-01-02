@@ -399,7 +399,8 @@ def extract_tracks_from_source(source_path: str, temp_dir: Path) -> Dict:
                     "codec": audio_info["codec"],
                     "original_bitrate": audio_info.get("bit_rate", "128000"),
                     "start_time": audio_info.get("start_time", 0),  # Store timing info
-                    "start_pts": audio_info.get("start_pts", 0)
+                    "start_pts": audio_info.get("start_pts", 0),
+                    "original_delay": audio_info.get("start_time", 0)  # Store for merge
                 })
                 print(f"  ✓ Extracted audio track {idx+1} ({audio_info['language']}) "
                       f"delay: {audio_info.get('start_time', 0):.3f}s")
@@ -524,73 +525,76 @@ def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: 
         return False
 
 def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_path: str) -> bool:
-    """Merge re-encoded tracks into target file with timing"""
+    """Merge re-encoded tracks into target file with FIXED timing using filter_complex"""
     try:
         # Get target info
         target_info = get_media_info(target_path)
         target_streams = extract_streams_info(target_info)
         
         # Build ffmpeg command
-        inputs = [target_path]
-        maps = ["-map", "0:v"]  # Target video
+        cmd = ["ffmpeg", "-y", "-i", target_path]
         
-        # Map target audio (original - will be preserved)
+        # Prepare inputs and mapping
+        input_files = []
+        filter_chains = []
+        map_specs = []
+        
+        # Map target video and original audio
+        map_specs.extend(["-map", "0:v"])
         for i in range(len(target_streams["audio_streams"])):
-            maps.extend(["-map", f"0:a:{i}"])
+            map_specs.extend(["-map", f"0:a:{i}"])
         
-        # Add re-encoded audio tracks WITH TIMING
-        audio_idx = 1
+        # Track input index for source audio files
+        audio_input_idx = 1
+        
+        # Add and process source audio tracks WITH DELAY FIX
         for audio_track in reencoded_tracks.get("audio_files", []):
             if os.path.exists(audio_track["path"]):
-                inputs.append(audio_track["path"])
-                maps.extend(["-map", f"{audio_idx}:a:0"])
+                input_files.append(audio_track["path"])
+                cmd.extend(["-i", audio_track["path"]])
                 
-                # Apply timing offset using -itsoffset
-                audio_delay = audio_track.get("original_delay", 0)
-                if audio_delay != 0:
-                    # Positive delay means audio starts later, need itsoffset
-                    maps.extend([f"-itsoffset:{audio_idx}", str(audio_delay)])
+                # Calculate delay in milliseconds
+                delay_ms = int(audio_track.get("original_delay", 0) * 1000)
                 
-                audio_idx += 1
+                if delay_ms != 0:
+                    # Create filter chain for delayed audio
+                    # Using [input_idx:a]adelay=delay_ms|delay_ms[output_label]
+                    filter_label = f"delayed_audio{audio_input_idx}"
+                    filter_chains.append(f"[{audio_input_idx}:a]adelay={delay_ms}|{delay_ms}[{filter_label}]")
+                    map_specs.extend(["-map", f"[{filter_label}]"])
+                    print(f"  Applying audio delay: {delay_ms}ms to track {audio_input_idx}")
+                else:
+                    # No delay, map directly
+                    map_specs.extend(["-map", f"{audio_input_idx}:a"])
+                
+                audio_input_idx += 1
         
-        # Map target subtitles
-        for i in range(len(target_streams["subtitle_streams"])):
-            maps.extend(["-map", f"0:s:{i}"])
-        
-        # Add extracted subtitle tracks
-        sub_idx = audio_idx
+        # Add extracted subtitle tracks (no delay needed)
         for sub_track in reencoded_tracks.get("subtitle_files", []):
             if os.path.exists(sub_track["path"]):
-                inputs.append(sub_track["path"])
-                maps.extend(["-map", f"{sub_idx}:s:0"])
-                sub_idx += 1
+                input_files.append(sub_track["path"])
+                cmd.extend(["-i", sub_track["path"]])
+                map_specs.extend(["-map", f"{audio_input_idx}:s:0"])
+                audio_input_idx += 1
         
-        # Build final command
-        cmd = ["ffmpeg", "-y"]
+        # Add filter complex if we have any audio delays
+        if filter_chains:
+            cmd.extend(["-filter_complex", ";".join(filter_chains)])
         
-        # Add all inputs
-        for input_file in inputs:
-            cmd.extend(["-i", input_file])
+        # Add all map specifications
+        cmd.extend(map_specs)
         
-        # Add maps and timing offsets
-        cmd.extend(maps)
-        
-        # Video settings - copy unchanged
+        # Codec settings
         cmd.extend([
             "-c:v", "copy",
+            "-c:a", "copy",
+            "-c:s", "copy",
         ])
-        
-        # Audio settings - copy all (already re-encoded with timing)
-        cmd.extend(["-c:a", "copy"])
-        
-        # Subtitle settings - copy all
-        cmd.extend(["-c:s", "copy"])
         
         # Set source audio as default, target audio as non-default
         total_target_audio = len(target_streams["audio_streams"])
-        if total_target_audio > 0:
+        if total_target_audio > 0 and len(reencoded_tracks.get("audio_files", [])) > 0:
             cmd.extend(["-disposition:a:0", "0"])  # Target audio not default
-        if len(reencoded_tracks.get("audio_files", [])) > 0:
             cmd.extend([f"-disposition:a:{total_target_audio}", "default"])  # First source audio default
         
         # Container optimizations
@@ -602,12 +606,13 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
         
         cmd.append(output_path)
         
-        print(f"Merging command with timing: {' '.join(cmd[:20])}...")
+        print(f"Merging command with FIXED timing (filter_complex):")
+        print(" ".join(cmd[:20]), "...")
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         if result.returncode == 0:
-            print("Merge successful with timing correction")
+            print("Merge successful with FIXED timing correction using filter_complex")
             return True
         else:
             print(f"Merge failed: {result.stderr[:500]}")
@@ -622,13 +627,13 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
 # Main optimized merging function
 def optimized_merge(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Optimized merging workflow with audio sync fix
+    Optimized merging workflow with FIXED audio sync using filter_complex
     """
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         
         try:
-            print(f"\n=== STARTING OPTIMIZED MERGE WITH SYNC FIX ===")
+            print(f"\n=== STARTING OPTIMIZED MERGE WITH FIXED SYNC ===")
             print(f"Source: {os.path.basename(source_path)}")
             print(f"Target: {os.path.basename(target_path)}")
             
@@ -660,13 +665,13 @@ def optimized_merge(source_path: str, target_path: str, output_path: str) -> boo
             for audio_track in extracted_tracks["audio_files"]:
                 reencoded_path = temp_path / f"reencoded_{os.path.basename(audio_track['path'])}"
                 
-                # NEW: Pass audio delay to re-encoding function
+                # Pass audio delay to re-encoding function
                 audio_delay = audio_track.get("start_time", 0)
                 if reencode_audio_for_target(audio_track["path"], target_specs, str(reencoded_path), audio_delay):
                     reencoded_tracks["audio_files"].append({
                         "path": str(reencoded_path),
                         "language": audio_track["language"],
-                        "original_delay": audio_delay  # Keep track of original delay
+                        "original_delay": audio_delay  # Keep track of original delay for filter_complex
                     })
                     # Delete original extracted audio
                     silent_cleanup(audio_track["path"])
@@ -677,8 +682,8 @@ def optimized_merge(source_path: str, target_path: str, output_path: str) -> boo
             for sub_track in extracted_tracks["subtitle_files"]:
                 reencoded_tracks["subtitle_files"].append(sub_track)
             
-            # STEP 5: Merge re-encoded tracks into target WITH TIMING
-            print("\n5. Merging tracks into target file with timing preservation...")
+            # STEP 5: Merge re-encoded tracks into target WITH FIXED TIMING using filter_complex
+            print("\n5. Merging tracks into target file with FIXED timing (filter_complex)...")
             success = merge_tracks_into_target(target_path, reencoded_tracks, output_path)
             
             # STEP 6: Cleanup all temporary files
@@ -710,6 +715,6 @@ def get_file_extension(file_path: str) -> str:
 
 def merge_audio_subtitles_simple(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Main merge function - Uses optimized workflow
+    Main merge function - Uses optimized workflow with FIXED audio sync
     """
     return optimized_merge(source_path, target_path, output_path)
