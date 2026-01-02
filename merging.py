@@ -524,7 +524,7 @@ def reencode_audio_for_target(audio_path: str, target_specs: Dict, output_path: 
         return False
 
 def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_path: str) -> bool:
-    """Merge re-encoded tracks into target file"""
+    """Merge re-encoded tracks into target file with timing"""
     try:
         # Get target info
         target_info = get_media_info(target_path)
@@ -538,12 +538,19 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
         for i in range(len(target_streams["audio_streams"])):
             maps.extend(["-map", f"0:a:{i}"])
         
-        # Add re-encoded audio tracks
+        # Add re-encoded audio tracks WITH TIMING
         audio_idx = 1
         for audio_track in reencoded_tracks.get("audio_files", []):
             if os.path.exists(audio_track["path"]):
                 inputs.append(audio_track["path"])
                 maps.extend(["-map", f"{audio_idx}:a:0"])
+                
+                # Apply timing offset using -itsoffset
+                audio_delay = audio_track.get("original_delay", 0)
+                if audio_delay != 0:
+                    # Positive delay means audio starts later, need itsoffset
+                    maps.extend([f"-itsoffset:{audio_idx}", str(audio_delay)])
+                
                 audio_idx += 1
         
         # Map target subtitles
@@ -565,7 +572,7 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
         for input_file in inputs:
             cmd.extend(["-i", input_file])
         
-        # Add maps
+        # Add maps and timing offsets
         cmd.extend(maps)
         
         # Video settings - copy unchanged
@@ -573,7 +580,7 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
             "-c:v", "copy",
         ])
         
-        # Audio settings - copy all (already re-encoded)
+        # Audio settings - copy all (already re-encoded with timing)
         cmd.extend(["-c:a", "copy"])
         
         # Subtitle settings - copy all
@@ -590,16 +597,17 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
         cmd.extend([
             "-movflags", "+faststart",
             "-max_interleave_delta", "0",
+            "-async", "1",  # Force audio sync
         ])
         
         cmd.append(output_path)
         
-        print(f"Merging command: {' '.join(cmd[:50])}...")  # Truncate for display
+        print(f"Merging command with timing: {' '.join(cmd[:20])}...")
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         if result.returncode == 0:
-            print("Merge successful")
+            print("Merge successful with timing correction")
             return True
         else:
             print(f"Merge failed: {result.stderr[:500]}")
@@ -614,24 +622,18 @@ def merge_tracks_into_target(target_path: str, reencoded_tracks: Dict, output_pa
 # Main optimized merging function
 def optimized_merge(source_path: str, target_path: str, output_path: str) -> bool:
     """
-    Optimized merging workflow:
-    1. Extract tracks from source
-    2. Delete source
-    3. Analyze target specs
-    4. Re-encode tracks to match target
-    5. Merge with target
-    6. Cleanup temp files
+    Optimized merging workflow with audio sync fix
     """
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         
         try:
-            print(f"\n=== STARTING OPTIMIZED MERGE ===")
+            print(f"\n=== STARTING OPTIMIZED MERGE WITH SYNC FIX ===")
             print(f"Source: {os.path.basename(source_path)}")
             print(f"Target: {os.path.basename(target_path)}")
             
-            # STEP 1: Extract tracks from source
-            print("\n1. Extracting tracks from source...")
+            # STEP 1: Extract tracks from source WITH TIMING INFO
+            print("\n1. Extracting tracks from source with timing preservation...")
             extracted_tracks = extract_tracks_from_source(source_path, temp_path)
             
             if not extracted_tracks["success"]:
@@ -647,21 +649,24 @@ def optimized_merge(source_path: str, target_path: str, output_path: str) -> boo
             target_specs = analyze_target_specs(target_path)
             print(f"   Target specs: {target_specs}")
             
-            # STEP 4: Re-encode extracted tracks
-            print("\n4. Re-encoding extracted tracks...")
+            # STEP 4: Re-encode extracted tracks WITH TIMING CORRECTION
+            print("\n4. Re-encoding extracted tracks with timing correction...")
             reencoded_tracks = {
                 "audio_files": [],
                 "subtitle_files": []
             }
             
-            # Re-encode audio tracks
+            # Re-encode audio tracks with timing info
             for audio_track in extracted_tracks["audio_files"]:
                 reencoded_path = temp_path / f"reencoded_{os.path.basename(audio_track['path'])}"
                 
-                if reencode_audio_for_target(audio_track["path"], target_specs, str(reencoded_path)):
+                # NEW: Pass audio delay to re-encoding function
+                audio_delay = audio_track.get("start_time", 0)
+                if reencode_audio_for_target(audio_track["path"], target_specs, str(reencoded_path), audio_delay):
                     reencoded_tracks["audio_files"].append({
                         "path": str(reencoded_path),
-                        "language": audio_track["language"]
+                        "language": audio_track["language"],
+                        "original_delay": audio_delay  # Keep track of original delay
                     })
                     # Delete original extracted audio
                     silent_cleanup(audio_track["path"])
@@ -672,8 +677,8 @@ def optimized_merge(source_path: str, target_path: str, output_path: str) -> boo
             for sub_track in extracted_tracks["subtitle_files"]:
                 reencoded_tracks["subtitle_files"].append(sub_track)
             
-            # STEP 5: Merge re-encoded tracks into target
-            print("\n5. Merging tracks into target file...")
+            # STEP 5: Merge re-encoded tracks into target WITH TIMING
+            print("\n5. Merging tracks into target file with timing preservation...")
             success = merge_tracks_into_target(target_path, reencoded_tracks, output_path)
             
             # STEP 6: Cleanup all temporary files
@@ -697,6 +702,7 @@ def optimized_merge(source_path: str, target_path: str, output_path: str) -> boo
             import traceback
             traceback.print_exc()
             return False
+            
 
 def get_file_extension(file_path: str) -> str:
     """Get file extension from path"""
